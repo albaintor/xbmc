@@ -2251,7 +2251,7 @@ JSONRPC_STATUS CPlayerOperations::GetChapters(const std::string& method,
                                               const CVariant& parameterObject,
                                               CVariant& result)
 {
-  // Return the chapters list of the running video
+  // Return the chapters list of the running video or empty list if none
   switch (GetPlayer(parameterObject["playerid"]))
   {
     case Video:

@@ -5090,6 +5090,7 @@
     "properties": {
       "index": {
         "type": "integer",
+        "required": true,
         "description": "One-based chapter index"
       },
       "name": {
@@ -5098,7 +5099,8 @@
         "description": "Chapter name if available"
       },
       "time": {
-        "type": "number",
+        "type": "integer",
+        "required": true,
         "description": "Chapter position in seconds from start"
       }
     }
