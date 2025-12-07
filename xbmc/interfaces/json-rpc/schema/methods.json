@@ -1397,7 +1397,9 @@
       "properties": {
         "chapters": {
           "type": "array",
-          "items": { "$ref": "Player.Chapter" },
+          "items": {
+            "$ref": "Player.Chapter"
+          },
           "required": true
         }
       }

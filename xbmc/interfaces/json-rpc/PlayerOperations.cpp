@@ -2245,14 +2245,19 @@ std::shared_ptr<CPVREpgInfoTag> CPlayerOperations::GetCurrentEpg()
   return currentChannel->GetEPGNow();
 }
 
-JSONRPC_STATUS CPlayerOperations::GetChapters(const std::string& method, ITransportLayer* transport, IClient* client, const CVariant& parameterObject, CVariant& result)
+JSONRPC_STATUS CPlayerOperations::GetChapters(const std::string& method,
+                                              ITransportLayer* transport,
+                                              IClient* client,
+                                              const CVariant& parameterObject,
+                                              CVariant& result)
 {
   // Return the chapters list of the running video
   switch (GetPlayer(parameterObject["playerid"]))
   {
     case Video:
       break;
-    default: return InvalidParams;
+    default:
+      return InvalidParams;
   }
   auto& components = CServiceBroker::GetAppComponents();
   const auto appPlayer = components.GetComponent<CApplicationPlayer>();
@@ -2264,18 +2269,19 @@ JSONRPC_STATUS CPlayerOperations::GetChapters(const std::string& method, ITransp
   const int chapterCount = appPlayer->GetChapterCount();
   CVariant chapters(CVariant::VariantTypeArray);
 
-  for (int i = 0; i < chapterCount; ++i)
+  for (int i = 1; i <= chapterCount; ++i)
   {
     CVariant chapter(CVariant::VariantTypeObject);
     chapter["index"] = i;
     // Chapter name
     std::string name;
-    appPlayer->GetChapterName(name, i + 1);
+    appPlayer->GetChapterName(name, i);
     if (!name.empty())
       chapter["name"] = name;
     // Chapter position in seconds
-    int64_t position = appPlayer->GetChapterPos(i + 1);
-    if (position < 0) continue;
+    int64_t position = appPlayer->GetChapterPos(i);
+    if (position < 0)
+      continue;
     chapter["time"] = position;
     chapters.push_back(chapter);
   }
