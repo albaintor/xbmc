@@ -2280,6 +2280,6 @@ JSONRPC_STATUS CPlayerOperations::GetChapters(const std::string& method, ITransp
     chapters.push_back(chapter);
   }
 
-  result["chapters"] = chapters;
+  result["chapters"] = std::move(chapters);
   return OK;
 }
