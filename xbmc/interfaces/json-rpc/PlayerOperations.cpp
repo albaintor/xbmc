@@ -2261,7 +2261,7 @@ JSONRPC_STATUS CPlayerOperations::GetChapters(const std::string& method, ITransp
     return FailedToExecute; // No running video
 
   // Extract chapters from CApplicationPlayer
-  int chapterCount = appPlayer->GetChapterCount();
+  const int chapterCount = appPlayer->GetChapterCount();
   CVariant chapters(CVariant::VariantTypeArray);
 
   for (int i = 0; i < chapterCount; ++i)
