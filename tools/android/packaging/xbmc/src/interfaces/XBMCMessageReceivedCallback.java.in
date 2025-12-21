@@ -1,0 +1,24 @@
+package @APP_PACKAGE@.interfaces;
+
+import android.util.Log;
+
+import androidx.annotation.NonNull;
+
+import com.google.android.gms.cast.CastDevice;
+import com.google.android.gms.cast.Cast;
+import com.google.android.gms.cast.framework.CastSession;
+
+/**
+ * Receives custom namespace messages from the Cast receiver and forwards to native (JNI).
+ */
+public final class XBMCMessageReceivedCallback implements Cast.MessageReceivedCallback {
+
+  @Override
+  public void onMessageReceived(@NonNull CastDevice castDevice,
+                                @NonNull String namespace,
+                                @NonNull String message) {
+    _nativeOnCastMessage(namespace, message);
+  }
+
+  private static native void _nativeOnCastMessage(@NonNull String nameSpace, @NonNull String message);
+}

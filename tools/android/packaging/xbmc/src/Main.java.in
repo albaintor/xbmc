@@ -26,6 +26,8 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Set;
 
+import org.xbmc.kodi.interfaces.XBMCCastManager;
+
 public class Main extends NativeActivity implements Choreographer.FrameCallback
 {
   private static final String TAG = "@APP_NAME@";
@@ -36,6 +38,7 @@ public class Main extends NativeActivity implements Choreographer.FrameCallback
   private XBMCSettingsContentObserver mSettingsContentObserver;
   private XBMCInputDeviceListener mInputDeviceListener;
   private XBMCJsonRPC mJsonRPC = null;
+  private XBMCCastManager mCastManager;
   private View mDecorView = null;
   private Handler handler = new Handler(Looper.myLooper());
 
@@ -152,6 +155,10 @@ public class Main extends NativeActivity implements Choreographer.FrameCallback
     mInputDeviceListener = new XBMCInputDeviceListener();
     InputManager manager = (InputManager) getSystemService(INPUT_SERVICE);
     manager.registerInputDeviceListener(mInputDeviceListener, handler);
+
+    // Initialize Cast manager to publish media metadata
+    mCastManager = XBMCCastManager.getInstance();
+    mCastManager.init(getApplicationContext());
 
     mDecorView = getWindow().getDecorView();
     mDecorView.setBackground(null);

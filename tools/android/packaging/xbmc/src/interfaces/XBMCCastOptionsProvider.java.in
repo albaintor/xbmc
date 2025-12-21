@@ -1,0 +1,30 @@
+package @APP_PACKAGE@.interfaces;
+
+import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
+import com.google.android.gms.cast.framework.CastOptions;
+import com.google.android.gms.cast.framework.OptionsProvider;
+import com.google.android.gms.cast.framework.SessionProvider;
+
+import java.util.List;
+
+public class XBMCCastOptionsProvider implements OptionsProvider {
+ @Override
+    public CastOptions getCastOptions(Context context) {
+        CastOptions castOptions = new CastOptions.Builder()
+            .setReceiverApplicationId("@APP_PACKAGE@")
+            .build();
+        return castOptions;
+    }
+    @Override
+    public List<SessionProvider> getAdditionalSessionProviders(Context context) {
+        return null;
+    }
+}
+     

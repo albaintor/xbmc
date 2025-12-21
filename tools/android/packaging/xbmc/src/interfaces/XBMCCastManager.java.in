@@ -1,0 +1,257 @@
+package @APP_PACKAGE@.interfaces;
+
+import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
+import com.google.android.gms.cast.framework.CastContext;
+import com.google.android.gms.cast.framework.CastSession;
+import com.google.android.gms.cast.framework.Session;
+import com.google.android.gms.cast.framework.SessionManager;
+import com.google.android.gms.cast.framework.SessionManagerListener;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.util.concurrent.atomic.AtomicReference;
+
+import @APP_PACKAGE@.interfaces.XBMCMessageReceivedCallback;
+import @APP_PACKAGE@.interfaces.XBMCCastOptionsProvider;
+
+/**
+ * XBMCCastManager
+ *
+ * Publishes media metadata to a Custom Chromecast receiver  using a custom namespace (urn:x-cast:...)
+ *
+ */
+public final class XBMCCastManager {
+  private static final String TAG = "XBMCCastManager";
+
+   /** Custom namespace used for both STATE (Kodi -> receiver) and CMD (receiver -> Kodi). */
+  private volatile String mNamespace = "urn:x-cast:com.xbmc.kodi.remote";
+
+  private static volatile XBMCCastManager sInstance;
+  public static XBMCCastManager getInstance() {
+    if (sInstance == null) {
+      synchronized (XBMCCastManager.class) {
+        if (sInstance == null) sInstance = new XBMCCastManager();
+      }
+    }
+    return sInstance;
+  }
+
+  private final Handler mMainHandler = new Handler(Looper.getMainLooper());
+  private final AtomicReference<CastSession> mCastSession = new AtomicReference<>(null);
+
+  private volatile CastContext mCastContext;
+  private volatile SessionManager mSessionManager;
+
+  private final SessionManagerListener<Session> mSessionListener = new SessionManagerListener<Session>() {
+    @Override public void onSessionStarting(@NonNull Session session) {
+    }
+
+    @Override public void onSessionStarted(@NonNull Session session, @NonNull String sessionId) {
+      updateCurrentSession();
+    }
+
+    @Override public void onSessionStartFailed(@NonNull Session session, int error) {
+      updateCurrentSession();
+    }
+
+    @Override public void onSessionEnding(@NonNull Session session) {
+    }
+
+    @Override public void onSessionEnded(@NonNull Session session, int error) {
+      updateCurrentSession();
+    }
+
+    @Override public void onSessionResuming(@NonNull Session session, @NonNull String sessionId) {
+    }
+
+    @Override public void onSessionResumed(@NonNull Session session, boolean wasSuspended) {
+      updateCurrentSession();
+    }
+
+    @Override public void onSessionResumeFailed(@NonNull Session session, int error) {
+      updateCurrentSession();
+    }
+
+    @Override public void onSessionSuspended(@NonNull Session session, int reason) {
+      updateCurrentSession();
+    }
+  };
+
+  private volatile XBMCMessageReceivedCallback mMessageCallback;
+
+  private XBMCCastManager() {}
+
+  public void setNamespace(@NonNull String namespace) {
+    mNamespace = namespace;
+    mMainHandler.post(() -> {
+      registerMessageCallbackIfConnected();
+    });
+  }
+
+  public boolean isConnected() {
+    return mCastSession.get() != null;
+  }
+  
+
+  /**
+   * Initialize Cast Framework once at startup (call from existing Kodi Activity onCreate()).
+   */
+  public void init(@NonNull Context context) {
+    final Context appCtx = context.getApplicationContext();
+    mMainHandler.post(() -> {
+      try {
+        Log.d(TAG, "Cast initializing");
+        mCastContext = CastContext.getSharedInstance(appCtx);
+        mSessionManager = mCastContext.getSessionManager();
+
+        if (mMessageCallback == null) mMessageCallback = new XBMCMessageReceivedCallback();
+
+        // Session lifecycle callbacks -> native
+        mSessionManager.addSessionManagerListener(mSessionListener, Session.class);
+
+        // Cache current session + register namespace receiver if connected
+        updateCurrentSession();
+        Log.d(TAG, "Cast initialized");
+      } catch (Exception e) {
+        Log.e(TAG, "Cast init failed (Play Services / Cast unavailable?)", e);
+        mCastContext = null;
+        mSessionManager = null;
+        mCastSession.set(null);
+      }
+    });
+  }
+
+    /**
+   * Register callback to receive CMD messages from receiver on the namespace.
+   */
+  private void registerMessageCallbackIfConnected() {
+    CastSession session = mCastSession.get();
+    if (session == null || mMessageCallback == null) return;
+
+    try {
+      // Register receiver->sender callback for our namespace
+      session.setMessageReceivedCallbacks(mNamespace, mMessageCallback);
+      Log.i(TAG, "Registered message callback for ns=" + mNamespace);
+    } catch (Exception e) {
+      Log.w(TAG, "Failed to register message callback (ns=" + mNamespace + ")", e);
+    }
+  }
+
+  private void unregisterMessageCallback() {
+    CastSession session = mCastSession.get();
+    if (session == null) return;
+
+    try {
+      // Unregister by setting null callback
+      session.setMessageReceivedCallbacks(mNamespace, null);
+      Log.i(TAG, "Unregistered message callback for ns=" + mNamespace);
+    } catch (Exception ignored) {}
+  }
+
+  /**
+   * Cleanup (call from Activity onDestroy()).
+   */
+  public void shutdown() {
+    mMainHandler.post(() -> {
+      try {
+        if (mSessionManager != null && mSessionListener != null) {
+          mSessionManager.removeSessionManagerListener(mSessionListener, Session.class);
+        }
+      } catch (Exception ignored) {}
+
+      unregisterMessageCallback();
+
+      mCastSession.set(null);
+      mSessionManager = null;
+      mCastContext = null;
+      Log.i(TAG, "Cast shutdown");
+    });
+  }
+
+  /**
+   * Publish a minimal "now playing" state (metadata-only).
+   * Call this from native (JNI) whenever Kodi metadata changes or periodically.
+   *
+   * artworkUrl must be HTTP/HTTPS reachable by Chromecast.
+   */
+  public void publishNowPlaying(@Nullable String title,
+                                @Nullable String subtitle,
+                                @Nullable String artworkUrl,
+                                long durationMs,
+                                long positionMs,
+                                boolean paused) {
+    JSONObject msg = new JSONObject();
+    try {
+      msg.put("type", "STATE");
+      msg.put("title", title != null ? title : JSONObject.NULL);
+      msg.put("subtitle", subtitle != null ? subtitle : JSONObject.NULL);
+      msg.put("artwork", artworkUrl != null ? artworkUrl : JSONObject.NULL);
+      msg.put("durationMs", durationMs);
+      msg.put("positionMs", positionMs);
+      msg.put("paused", paused);
+    } catch (JSONException e) {
+      Log.e(TAG, "publishNowPlaying: JSON build failed", e);
+      return;
+    }
+    sendMessageInternal(msg.toString());
+  }
+
+  /**
+   * Publish an arbitrary STATE JSON string (advanced use).
+   * Example payload should contain "type":"STATE".
+   */
+  public void publishStateJson(@NonNull String json) {
+    sendMessageInternal(json);
+  }
+
+  private void sendMessageInternal(@NonNull String message) {
+    mMainHandler.post(() -> {
+      CastSession session = mCastSession.get();
+      if (session == null) {
+        Log.d(TAG, "sendMessage ignored: no Cast session");
+        return;
+      }
+
+      session.sendMessage(mNamespace, message);
+    });
+  }
+
+  /**
+   * Must be called when native wants to refresh whether we are connected
+   * (optional convenience).
+   */
+  public void refreshSessionState() {
+    mMainHandler.post(() -> {
+      updateCurrentSession();
+    });
+  }
+
+
+  /** Updates the cached current Cast session reference. */
+  private void updateCurrentSession() {
+    if (mSessionManager == null) {
+      mCastSession.set(null);
+      return;
+    }
+    Session current = mSessionManager.getCurrentSession();
+    CastSession cast = (current instanceof CastSession) ? (CastSession) current : null;
+    boolean nowConnected = (cast != null);
+    mCastSession.set(cast);
+    Log.i(TAG, "Current CastSession=" + (cast != null));
+    if (!nowConnected) {
+      unregisterMessageCallback();
+    } else {
+      registerMessageCallbackIfConnected();
+    }
+  }
+
+
+}

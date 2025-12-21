@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "FileItem.h"
 #include "IActivityHandler.h"
 #include "IInputHandler.h"
 #include "JNIMainActivity.h"
@@ -207,6 +208,9 @@ public:
 
   bool getVideosurfaceInUse();
   void setVideosurfaceInUse(bool videosurfaceInUse);
+
+  // Current playback
+  CFileItemPtr GetCurrentlyPlayingItem();
 
 protected:
   // limit who can access Volume
