@@ -13,6 +13,7 @@
 #include "FileItem.h"
 // Audio Engine includes for Factory and interfaces
 #include "GUIInfoManager.h"
+#include "PlayListPlayer.h"
 #include "ServiceBroker.h"
 #include "TextureCache.h"
 #include "application/AppEnvironment.h"
@@ -30,12 +31,14 @@
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
 #include "guilib/guiinfo/GUIInfoLabels.h"
+#include "imagefiles/ImageFileURL.h"
 #include "input/actions/Action.h"
 #include "input/actions/ActionIDs.h"
 #include "input/mouse/MouseStat.h"
 #include "interfaces/AnnouncementManager.h"
 #include "messaging/ApplicationMessenger.h"
 #include "platform/xbmc.h"
+#include "playlists/PlayList.h"
 #include "powermanagement/PowerManager.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/DisplaySettings.h"
@@ -800,12 +803,27 @@ CRect CXBMCApp::MapRenderToDroid(const CRect& srcRect)
   return CRect(srcRect.x1 * scaleX, srcRect.y1 * scaleY, srcRect.x2 * scaleX, srcRect.y2 * scaleY);
 }
 
+CFileItemPtr CXBMCApp::GetCurrentlyPlayingItem()
+{
+  // Return current playing item if any
+  auto& pl = CServiceBroker::GetPlaylistPlayer();
+  auto playlistId = pl.GetCurrentPlaylist();
+  const int idx = pl.GetCurrentItemIdx();
+  if (idx < 0)
+    return nullptr;
+  auto& list = pl.GetPlaylist(playlistId);
+  const auto& item = list[idx];
+  return item;
+}
+
 void CXBMCApp::UpdateSessionMetadata()
 {
   const auto& components = CServiceBroker::GetAppComponents();
   const auto appPlayer = components.GetComponent<CApplicationPlayer>();
   CGUIInfoManager& infoMgr = CServiceBroker::GetGUI()->GetInfoManager();
   CJNIMediaMetadataBuilder builder;
+  const CFileItemPtr currentPlayingItem = GetCurrentlyPlayingItem();
+
   builder
       .putString(CJNIMediaMetadata::METADATA_KEY_DISPLAY_TITLE,
                  infoMgr.GetLabel(PLAYER_TITLE, INFO::DEFAULT_CONTEXT))
@@ -816,16 +834,21 @@ void CXBMCApp::UpdateSessionMetadata()
       //      .putString(CJNIMediaMetadata::METADATA_KEY_DISPLAY_ICON_URI, thumb)
       //      .putString(CJNIMediaMetadata::METADATA_KEY_ALBUM_ART_URI, thumb)
       ;
-
-  std::string thumb;
+  std::string thumb = IMAGE_FILES::URLFromFile(currentPlayingItem->GetArt("thumb"));
   if (m_playback_state & PLAYBACK_STATE_VIDEO)
-  {
+  {   
     builder
         .putString(CJNIMediaMetadata::METADATA_KEY_DISPLAY_SUBTITLE,
                    infoMgr.GetLabel(VIDEOPLAYER_TAGLINE, INFO::DEFAULT_CONTEXT))
         .putString(CJNIMediaMetadata::METADATA_KEY_ARTIST,
                    infoMgr.GetLabel(VIDEOPLAYER_DIRECTOR, INFO::DEFAULT_CONTEXT));
-    thumb = infoMgr.GetImage(VIDEOPLAYER_COVER, -1);
+    if (currentPlayingItem)
+    {
+      CLog::Log(LOGDEBUG, "Thumbnail extracted {}", thumb);
+      builder.putString(CJNIMediaMetadata::METADATA_KEY_ART_URI, thumb);
+      builder.putString(CJNIMediaMetadata::METADATA_KEY_DISPLAY_ICON_URI, thumb);
+    }
+    
   }
   else if (m_playback_state & PLAYBACK_STATE_AUDIO)
   {
@@ -833,9 +856,22 @@ void CXBMCApp::UpdateSessionMetadata()
         .putString(CJNIMediaMetadata::METADATA_KEY_DISPLAY_SUBTITLE,
                    infoMgr.GetLabel(MUSICPLAYER_ARTIST, INFO::DEFAULT_CONTEXT))
         .putString(CJNIMediaMetadata::METADATA_KEY_ARTIST,
-                   infoMgr.GetLabel(MUSICPLAYER_ARTIST, INFO::DEFAULT_CONTEXT));
-    thumb = infoMgr.GetImage(MUSICPLAYER_COVER, -1);
+                   infoMgr.GetLabel(MUSICPLAYER_ARTIST, INFO::DEFAULT_CONTEXT))
+        .putString(CJNIMediaMetadata::METADATA_KEY_ALBUM,
+                   infoMgr.GetLabel(MUSICPLAYER_ALBUM, INFO::DEFAULT_CONTEXT));
+        int trackNumber = 0;
+        if (infoMgr.GetInt(trackNumber, MUSICPLAYER_TRACK_NUMBER, INFO::DEFAULT_CONTEXT))
+        {
+          builder.putLong(CJNIMediaMetadata::METADATA_KEY_TRACK_NUMBER, (long)trackNumber);
+        }
+        
+    if (currentPlayingItem)
+    {
+      builder.putString(CJNIMediaMetadata::METADATA_KEY_ART_URI, thumb);
+      builder.putString(CJNIMediaMetadata::METADATA_KEY_ALBUM_ART_URI, thumb);
+    }
   }
+
   bool needrecaching = false;
   std::string cachefile = CServiceBroker::GetTextureCache()->CheckCachedImage(thumb, needrecaching);
   if (!cachefile.empty())
@@ -845,6 +881,9 @@ void CXBMCApp::UpdateSessionMetadata()
     if (bmp)
       builder.putBitmap(CJNIMediaMetadata::METADATA_KEY_ART, bmp);
   }
+
+  builder.putString("Kodi.custom.string", "Test Kodi custom value");
+
   m_mediaSession->updateMetadata(builder.build());
 }
 
@@ -886,6 +925,7 @@ void CXBMCApp::UpdateSessionState()
         .setActions(CJNIPlaybackState::PLAYBACK_POSITION_UNKNOWN);
     m_mediaSession->updatePlaybackState(builder.build());
     m_mediaSessionUpdated = true;
+    UpdateSessionMetadata();
   }
 }
 
