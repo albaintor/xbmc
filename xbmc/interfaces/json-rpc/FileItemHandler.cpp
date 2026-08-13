@@ -46,6 +46,35 @@ using namespace MUSIC_INFO;
 using namespace JSONRPC;
 using namespace XFILE;
 
+namespace
+{
+// Determine whether the requested JSON-RPC fields require CThumbLoader to
+// fetch library artwork for this item. A loader is needed only for library
+// items with unresolved artwork: "art" requires the complete art map, while
+// "thumbnail" and "fanart" require a lookup only when the corresponding art
+// is not already present. Items marked libraryartfilled are already complete.
+bool NeedsLibraryArtLoader(const CFileItem& item, const std::set<std::string>& fields)
+{
+  if (item.GetProperty("libraryartfilled").asBoolean())
+    return false;
+
+  const bool isLibraryItem =
+      (item.HasVideoInfoTag() && item.GetVideoInfoTag()->m_iDbId > -1) ||
+      (item.HasMusicInfoTag() && item.GetMusicInfoTag()->GetDatabaseId() > -1);
+  if (!isLibraryItem)
+    return false;
+
+  if (fields.contains("art"))
+    return true;
+  if (fields.contains("thumbnail") && !item.HasArt("thumb"))
+    return true;
+  if (fields.contains("fanart") && !item.HasArt("fanart"))
+    return true;
+
+  return false;
+}
+} // unnamed namespace
+
 bool CFileItemHandler::GetField(const std::string& field,
                                 const CVariant& info,
                                 const std::shared_ptr<CFileItem>& item,
@@ -204,8 +233,10 @@ bool CFileItemHandler::GetField(const std::string& field,
 
     if (field == "thumbnail")
     {
-      if (thumbLoader != NULL && !item->HasArt("thumb") && !fetchedArt &&
-        ((item->HasVideoInfoTag() && item->GetVideoInfoTag()->m_iDbId > -1) || (item->HasMusicInfoTag() && item->GetMusicInfoTag()->GetDatabaseId() > -1)))
+      if (thumbLoader != NULL && !item->GetProperty("libraryartfilled").asBoolean() &&
+          !item->HasArt("thumb") && !fetchedArt &&
+          ((item->HasVideoInfoTag() && item->GetVideoInfoTag()->m_iDbId > -1) ||
+           (item->HasMusicInfoTag() && item->GetMusicInfoTag()->GetDatabaseId() > -1)))
       {
         thumbLoader->FillLibraryArt(*item);
         fetchedArt = true;
@@ -223,8 +254,10 @@ bool CFileItemHandler::GetField(const std::string& field,
 
     if (field == "fanart")
     {
-      if (thumbLoader != NULL && !item->HasArt("fanart") && !fetchedArt &&
-        ((item->HasVideoInfoTag() && item->GetVideoInfoTag()->m_iDbId > -1) || (item->HasMusicInfoTag() && item->GetMusicInfoTag()->GetDatabaseId() > -1)))
+      if (thumbLoader != NULL && !item->GetProperty("libraryartfilled").asBoolean() &&
+          !item->HasArt("fanart") && !fetchedArt &&
+          ((item->HasVideoInfoTag() && item->GetVideoInfoTag()->m_iDbId > -1) ||
+           (item->HasMusicInfoTag() && item->GetMusicInfoTag()->GetDatabaseId() > -1)))
       {
         thumbLoader->FillLibraryArt(*item);
         fetchedArt = true;
@@ -304,18 +337,6 @@ void CFileItemHandler::HandleFileItemList(const char *ID, bool allowFile, const 
     end = items.Size();
   }
 
-  CThumbLoader *thumbLoader = NULL;
-  if (end - start > 0)
-  {
-    if (items.Get(start)->HasVideoInfoTag())
-      thumbLoader = new CVideoThumbLoader();
-    else if (items.Get(start)->HasMusicInfoTag())
-      thumbLoader = new CMusicThumbLoader();
-
-    if (thumbLoader != NULL)
-      thumbLoader->OnLoaderStart();
-  }
-
   std::set<std::string> fields;
   if (parameterObject.isMember("properties") && parameterObject["properties"].isArray())
   {
@@ -323,6 +344,22 @@ void CFileItemHandler::HandleFileItemList(const char *ID, bool allowFile, const 
          field != parameterObject["properties"].end_array(); ++field)
       fields.insert(field->asString());
   }
+
+  CThumbLoader* thumbLoader = NULL;
+  for (int i = start; i < end && thumbLoader == NULL; ++i)
+  {
+    const CFileItemPtr item = items.Get(i);
+    if (!item || !NeedsLibraryArtLoader(*item, fields))
+      continue;
+
+    if (item->HasVideoInfoTag())
+      thumbLoader = new CVideoThumbLoader();
+    else if (item->HasMusicInfoTag())
+      thumbLoader = new CMusicThumbLoader();
+  }
+
+  if (thumbLoader != NULL)
+    thumbLoader->OnLoaderStart();
 
   result[resultname].reserve(static_cast<size_t>(end - start));
   for (int i = start; i < end; i++)
@@ -375,22 +412,21 @@ void CFileItemHandler::HandleFileItem(const char* ID,
     {
       if (allowFile)
       {
-        //! @todo get rid of "videos with versions as folder" hack!
-        if (fields.contains("filetype") && item->GetProperty("IsHybridFolder").asBoolean(false))
-        {
+        // Use the browsed path for folders, not the media tag path.
+        if (fields.contains("filetype") && item->IsFolder())
           object["file"] = item->GetPath().c_str();
-        }
-        else if (item->HasVideoInfoTag() && !item->GetVideoInfoTag()->GetPath().empty())
+        else
         {
-          object["file"] = item->GetVideoInfoTag()->GetPath().c_str();
-        }
-        if (item->HasMusicInfoTag() && !item->GetMusicInfoTag()->GetURL().empty())
-          object["file"] = item->GetMusicInfoTag()->GetURL().c_str();
-        if (item->HasPVRTimerInfoTag() && !item->GetPVRTimerInfoTag()->Path().empty())
-          object["file"] = item->GetPVRTimerInfoTag()->Path().c_str();
+          if (item->HasVideoInfoTag() && !item->GetVideoInfoTag()->GetPath().empty())
+            object["file"] = item->GetVideoInfoTag()->GetPath().c_str();
+          if (item->HasMusicInfoTag() && !item->GetMusicInfoTag()->GetURL().empty())
+            object["file"] = item->GetMusicInfoTag()->GetURL().c_str();
+          if (item->HasPVRTimerInfoTag() && !item->GetPVRTimerInfoTag()->Path().empty())
+            object["file"] = item->GetPVRTimerInfoTag()->Path().c_str();
 
-        if (!object.isMember("file"))
-          object["file"] = item->GetDynPath().c_str();
+          if (!object.isMember("file"))
+            object["file"] = item->GetDynPath().c_str();
+        }
       }
       fields.erase(fileField);
     }
@@ -461,7 +497,7 @@ void CFileItemHandler::HandleFileItem(const char* ID,
     }
 
     bool deleteThumbloader = false;
-    if (thumbLoader == NULL)
+    if (thumbLoader == NULL && NeedsLibraryArtLoader(*item, fields))
     {
       if (item->HasVideoInfoTag())
         thumbLoader = new CVideoThumbLoader();

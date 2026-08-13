@@ -11919,6 +11919,378 @@ bool CVideoDatabase::GetItemsForPath(const std::string &content, const std::stri
   return !items.IsEmpty();
 }
 
+bool CVideoDatabase::GetItemsForPaths(const std::string& content,
+                                      const CFileItemList& fileItems,
+                                      int getDetails,
+                                      bool allArt,
+                                      const std::set<std::string>& artTypes,
+                                      CFileItemList& items)
+{
+  std::string view;
+  std::string idColumn;
+  std::string mediaType;
+
+  if (content == "movies")
+  {
+    view = "movie_view";
+    idColumn = "idMovie";
+    mediaType = MediaTypeMovie;
+  }
+  else if (content == "episodes")
+  {
+    view = "episode_view";
+    idColumn = "idEpisode";
+    mediaType = MediaTypeEpisode;
+  }
+  else if (content == "tvshows")
+  {
+    view = "tvshow_view";
+    idColumn = "idShow";
+    mediaType = MediaTypeTvShow;
+  }
+  else if (content == "musicvideos")
+  {
+    view = "musicvideo_view";
+    idColumn = "idMVideo";
+    mediaType = MediaTypeMusicVideo;
+  }
+  else
+    return false;
+
+  const bool loadArt = allArt || !artTypes.empty();
+  std::string sql;
+
+  try
+  {
+    if (!m_pDB || !m_pDS)
+      return false;
+
+    std::string where;
+    for (int i = 0; i < fileItems.Size(); ++i)
+    {
+      const CFileItemPtr& fileItem = fileItems[i];
+      const std::string& path = fileItem->GetPath();
+
+      // These paths require the special matching logic used by the video UI. Fall back to
+      // GetItemsForPath() for the whole directory rather than changing their semantics here.
+      if (URIUtils::IsStack(path) || URIUtils::IsMultiPath(path) || fileItem->IsOpticalMediaFile())
+        return false;
+
+      std::string condition;
+      if (content == "tvshows")
+      {
+        if (!fileItem->IsFolder())
+          continue;
+        condition = PrepareSQL("v.strPath='%s'", path.c_str());
+      }
+      else
+      {
+        // Folder based movies/discs need base-path matching. Keep the existing directory batch
+        // path for those uncommon cases.
+        if (fileItem->IsFolder())
+          return false;
+        if (!KODI::VIDEO::IsVideo(*fileItem))
+          continue;
+
+        const std::string directory = URIUtils::GetDirectory(path);
+        const std::string filename = URIUtils::GetFileName(path);
+        condition = PrepareSQL("(v.strPath='%s' AND v.strFileName='%s')", directory.c_str(),
+                               filename.c_str());
+      }
+
+      if (!where.empty())
+        where += " OR ";
+      where += condition;
+    }
+
+    // A page can legitimately contain no video entries at all.
+    if (where.empty())
+    {
+      items.SetFastLookup(true);
+      return true;
+    }
+
+    sql = "SELECT v.*";
+    if (loadArt)
+      sql += ", a.type AS jsonrpc_art_type, a.url AS jsonrpc_art_url";
+
+    sql += " FROM " + view + " v";
+    if (loadArt)
+    {
+      sql +=
+          " LEFT JOIN art a ON a.media_id=v." + idColumn + " AND a.media_type='" + mediaType + "'";
+      if (!allArt)
+      {
+        sql += " AND (";
+        bool first = true;
+        for (const auto& artType : artTypes)
+        {
+          if (!first)
+            sql += " OR ";
+          sql += PrepareSQL("a.type='%s'", artType.c_str());
+          first = false;
+        }
+        sql += ")";
+      }
+    }
+    sql += " WHERE " + where;
+
+    if (!m_pDS->query(sql))
+      return false;
+
+    using ArtTargets = std::map<int, std::vector<CFileItemPtr>>;
+    // Additional artwork to query that cannot be populated through the JOIN query.
+    ArtTargets assetTargets;
+    ArtTargets setTargets;
+    ArtTargets tvShowTargets;
+    ArtTargets seasonTargets;
+
+    std::map<std::string, CFileItemPtr, std::less<>> resultItems;
+
+    // Artwork join can return multiple rows for the same library item.
+    // Create and populate the CFileItem only once per media/file id.
+    while (!m_pDS->eof())
+    {
+      const int mediaId = m_pDS->fv(idColumn.c_str()).get_asInt();
+      std::string key = std::to_string(mediaId);
+      if (content != "tvshows")
+        key += ":" + std::to_string(m_pDS->fv("idFile").get_asInt());
+
+      CFileItemPtr libraryItem;
+      const auto existing = resultItems.find(key);
+      if (existing == resultItems.end())
+      {
+        libraryItem = std::make_shared<CFileItem>();
+
+        // Populate the video tag from the current database view row. Additional
+        // relational details are fetched according to the requested details mask.
+        CVideoInfoTag details;
+        if (content == "movies")
+          details = GetDetailsForMovie(*m_pDS, getDetails);
+        else if (content == "episodes")
+          details = GetDetailsForEpisode(*m_pDS, getDetails);
+        else if (content == "tvshows")
+          details = GetDetailsForTvShow(*m_pDS, getDetails, libraryItem.get());
+        else
+          details = GetDetailsForMusicVideo(*m_pDS, getDetails);
+
+        libraryItem->SetFromVideoInfoTag(details);
+        if (!details.m_basePath.empty())
+          libraryItem->SetPath(details.m_basePath);
+        else if (content == "tvshows")
+          libraryItem->SetPath(m_pDS->fv("strPath").get_asString());
+        if (content == "tvshows")
+          libraryItem->SetFolder(true);
+
+        // Artwork that cannot be found in the query's JOIN (i.e., video version, collection,
+        // TV show, or season) is retrieved with a second batch query.
+        if (loadArt)
+        {
+          const bool isVideoAsset = content == "movies" &&
+                                    details.GetAssetInfo().GetType() != VideoAssetType::UNKNOWN &&
+                                    !details.IsDefaultVideoVersion();
+          if (isVideoAsset && details.m_iFileId >= 0)
+            assetTargets[details.m_iFileId].push_back(libraryItem);
+
+          if (allArt && content == "movies" && details.m_set.GetID() >= 0)
+            setTargets[details.m_set.GetID()].push_back(libraryItem);
+
+          if (content == "episodes")
+          {
+            if ((allArt || artTypes.contains("fanart")) && details.m_iIdShow >= 0)
+              tvShowTargets[details.m_iIdShow].push_back(libraryItem);
+            if (allArt && details.m_iSeason > -1 && details.m_iIdSeason >= 0)
+              seasonTargets[details.m_iIdSeason].push_back(libraryItem);
+          }
+        }
+
+        resultItems.emplace(key, libraryItem);
+        items.Add(libraryItem);
+      }
+      else
+        libraryItem = existing->second;
+
+      // Artwork retrieved directly by the JOIN query.
+      if (loadArt)
+      {
+        const CVideoInfoTag* tag = libraryItem->GetVideoInfoTag();
+        const bool isVideoAsset = content == "movies" &&
+                                  tag->GetAssetInfo().GetType() != VideoAssetType::UNKNOWN &&
+                                  !tag->IsDefaultVideoVersion();
+        const bool useOwnerArt =
+            !isVideoAsset || tag->GetAssetInfo().GetType() == VideoAssetType::VERSION;
+        if (useOwnerArt)
+        {
+          const std::string artType = m_pDS->fv("jsonrpc_art_type").get_asString();
+          const std::string artUrl = m_pDS->fv("jsonrpc_art_url").get_asString();
+          if (!artType.empty() && !artUrl.empty())
+            libraryItem->SetArt(artType, artUrl);
+        }
+      }
+
+      m_pDS->next();
+    }
+    m_pDS->close();
+
+    if (loadArt)
+    {
+      const auto idList = [](const ArtTargets& targets)
+      {
+        std::string ids;
+        for (const auto& target : targets)
+        {
+          if (!ids.empty())
+            ids += ',';
+          ids += std::to_string(target.first);
+        }
+        return ids;
+      };
+
+      const auto artTypeFilter = [this](const std::set<std::string>& types)
+      {
+        std::string filter;
+        if (types.empty())
+          return filter;
+
+        filter = " AND (";
+        bool first = true;
+        for (const auto& type : types)
+        {
+          if (!first)
+            filter += " OR ";
+          filter += PrepareSQL("type='%s'", type.c_str());
+          first = false;
+        }
+        filter += ')';
+        return filter;
+      };
+
+      std::vector<std::string> relatedArtConditions;
+      if (!assetTargets.empty())
+      {
+        std::string condition = PrepareSQL("(media_type='%s' AND media_id IN (%s)",
+                                           MediaTypeVideoVersion, idList(assetTargets).c_str());
+        if (!allArt)
+          condition += artTypeFilter(artTypes);
+        condition += ')';
+        relatedArtConditions.emplace_back(condition);
+      }
+      if (!setTargets.empty())
+      {
+        relatedArtConditions.emplace_back(PrepareSQL("(media_type='%s' AND media_id IN (%s))",
+                                                     MediaTypeVideoCollection,
+                                                     idList(setTargets).c_str()));
+      }
+      if (!tvShowTargets.empty())
+      {
+        std::string condition = PrepareSQL("(media_type='%s' AND media_id IN (%s)", MediaTypeTvShow,
+                                           idList(tvShowTargets).c_str());
+        if (!allArt)
+          condition += PrepareSQL(" AND type='%s'", "fanart");
+        condition += ')';
+        relatedArtConditions.emplace_back(condition);
+      }
+      if (!seasonTargets.empty())
+      {
+        relatedArtConditions.emplace_back(PrepareSQL("(media_type='%s' AND media_id IN (%s))",
+                                                     MediaTypeSeason,
+                                                     idList(seasonTargets).c_str()));
+      }
+
+      std::set<int> tvShowsWithArt;
+      if (!relatedArtConditions.empty())
+      {
+        sql = "SELECT media_type, media_id, type, url FROM art WHERE ";
+        for (size_t i = 0; i < relatedArtConditions.size(); ++i)
+        {
+          if (i > 0)
+            sql += " OR ";
+          sql += relatedArtConditions[i];
+        }
+
+        if (!m_pDS->query(sql))
+        {
+          items.Clear();
+          return false;
+        }
+
+        while (!m_pDS->eof())
+        {
+          const std::string relatedMediaType = m_pDS->fv(0).get_asString();
+          const int relatedMediaId = m_pDS->fv(1).get_asInt();
+          const std::string artType = m_pDS->fv(2).get_asString();
+          const std::string artUrl = m_pDS->fv(3).get_asString();
+
+          const ArtTargets* targets = nullptr;
+          std::string prefix;
+          if (relatedMediaType == MediaTypeVideoVersion)
+            targets = &assetTargets;
+          else if (relatedMediaType == MediaTypeVideoCollection)
+          {
+            targets = &setTargets;
+            prefix = std::string(MediaTypeVideoCollection) + '.';
+          }
+          else if (relatedMediaType == MediaTypeTvShow)
+          {
+            targets = &tvShowTargets;
+            prefix = std::string(MediaTypeTvShow) + '.';
+            tvShowsWithArt.insert(relatedMediaId);
+          }
+          else if (relatedMediaType == MediaTypeSeason)
+          {
+            targets = &seasonTargets;
+            prefix = std::string(MediaTypeSeason) + '.';
+          }
+
+          if (targets && !artType.empty() && !artUrl.empty())
+          {
+            const auto target = targets->find(relatedMediaId);
+            if (target != targets->end())
+            {
+              for (const auto& item : target->second)
+                item->SetArt(prefix + artType, artUrl);
+            }
+          }
+
+          m_pDS->next();
+        }
+        m_pDS->close();
+      }
+
+      for (const int idShow : tvShowsWithArt)
+      {
+        const auto target = tvShowTargets.find(idShow);
+        if (target == tvShowTargets.end())
+          continue;
+        for (const auto& item : target->second)
+        {
+          item->SetArtFallback("fanart", "tvshow.fanart");
+          item->SetArtFallback("tvshow.thumb", "tvshow.poster");
+        }
+      }
+
+      // The direct join plus the related-art query above now covers the same library artwork
+      // sources as CVideoThumbLoader::FillLibraryArt for these video items.
+      for (const auto& item : items)
+        item->SetProperty("libraryartfilled", true);
+    }
+
+    items.SetFastLookup(true);
+    return true;
+  }
+  catch (...)
+  {
+    if (m_pDS)
+      m_pDS->close();
+    if (m_pDS2)
+      m_pDS2->close();
+    items.Clear();
+    CLog::LogF(LOGERROR, "error during query: {}", sql);
+  }
+
+  return false;
+}
+
 void CVideoDatabase::AppendIdLinkFilter(const char* field,
                                         const char* table,
                                         const MediaType& mediaType,

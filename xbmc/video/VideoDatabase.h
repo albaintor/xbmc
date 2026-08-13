@@ -578,6 +578,32 @@ public:
    \return true if items are found, false otherwise.
    */
   bool GetItemsForPath(const std::string &content, const std::string &path, CFileItemList &items);
+  /*! \brief Get video library items matching a list of filesystem items.
+   Performs a targeted lookup of library metadata for the supplied filesystem
+   entries. Only supported video library content types are handled.
+   \param content Video library content type. Supported values are "movies",
+                  "episodes", "tvshows" and "musicvideos".
+   \param fileItems Filesystem items whose paths are used to find matching
+                    video library entries.
+   \param getDetails Bitmask specifying which additional video details should
+                     be populated in the returned items.
+   \param allArt Whether all artwork types should be loaded. When false, only
+                 the artwork types listed in \p artTypes are loaded.
+   \param artTypes Artwork types to load when \p allArt is false, for example
+                   "thumb" or "fanart".
+   \param items Output list containing the matching video library items,
+                enriched with the requested metadata and artwork.
+   \return true if the targeted lookup was successfully performed, including
+           when no supplied filesystem item matched the video library;
+           false if the lookup cannot be performed and the caller should use
+           the regular fallback path.
+   */
+  bool GetItemsForPaths(const std::string& content,
+                        const CFileItemList& fileItems,
+                        int getDetails,
+                        bool allArt,
+                        const std::set<std::string>& artTypes,
+                        CFileItemList& items);
 
   /*! \brief Check whether a given scraper is in use.
    \param scraperID the scraper to check for.
@@ -860,7 +886,7 @@ public:
    * \param fallback optionally request fallback to the art of the parent/owner for each art type
      that is not defined for the asset
    * \param art collection of the retrieved art
-   * \return 
+   * \return
   */
   bool GetArtForAsset(int assetId, ArtFallbackOptions fallback, KODI::ART::Artwork& art);
   bool HasArtForItem(int mediaId, const MediaType &mediaType);
