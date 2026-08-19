@@ -830,7 +830,7 @@ void CGUIWindowVideoBase::LoadVideoInfo(CFileItemList& items,
     else
     {
       /* NOTE: Currently we GetPlayCounts on our items regardless of whether content is set
-                as if content is set, GetItemsForPaths doesn't return anything not in the content tables.
+                as if content is set, GetItemsForPath doesn't return anything not in the content tables.
                 This code can be removed once the content tables are always filled */
       if (!pItem->IsFolder() && !fetchedPlayCounts)
       {

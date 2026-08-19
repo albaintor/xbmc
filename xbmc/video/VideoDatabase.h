@@ -575,35 +575,13 @@ public:
    \param content the content type to fetch.
    \param path the path to fetch videos from.
    \param items the returned items
+   \param getDetails bitmask specifying which additional video details to load
    \return true if items are found, false otherwise.
    */
-  bool GetItemsForPath(const std::string &content, const std::string &path, CFileItemList &items);
-  /*! \brief Get video library items matching a list of filesystem items.
-   Performs a targeted lookup of library metadata for the supplied filesystem
-   entries. Only supported video library content types are handled.
-   \param content Video library content type. Supported values are "movies",
-                  "episodes", "tvshows" and "musicvideos".
-   \param fileItems Filesystem items whose paths are used to find matching
-                    video library entries.
-   \param getDetails Bitmask specifying which additional video details should
-                     be populated in the returned items.
-   \param allArt Whether all artwork types should be loaded. When false, only
-                 the artwork types listed in \p artTypes are loaded.
-   \param artTypes Artwork types to load when \p allArt is false, for example
-                   "thumb" or "fanart".
-   \param items Output list containing the matching video library items,
-                enriched with the requested metadata and artwork.
-   \return true if the targeted lookup was successfully performed, including
-           when no supplied filesystem item matched the video library;
-           false if the lookup cannot be performed and the caller should use
-           the regular fallback path.
-   */
-  bool GetItemsForPaths(const std::string& content,
-                        const CFileItemList& fileItems,
-                        int getDetails,
-                        bool allArt,
-                        const std::set<std::string>& artTypes,
-                        CFileItemList& items);
+  bool GetItemsForPath(const std::string& content,
+                       const std::string& path,
+                       CFileItemList& items,
+                       int getDetails = VideoDbDetailsNone);
 
   /*! \brief Check whether a given scraper is in use.
    \param scraperID the scraper to check for.
@@ -876,6 +854,12 @@ public:
   bool SetArtForItem(int mediaId, const MediaType& mediaType, const KODI::ART::Artwork& art);
   bool GetArtForItem(int mediaId, const MediaType& mediaType, KODI::ART::Artwork& art);
   std::string GetArtForItem(int mediaId, const MediaType &mediaType, const std::string &artType);
+
+  /*! \brief Retrieve library artwork for a list of video items in a single query.
+   * \param items video items to populate with direct and related library artwork.
+   * \return true if the artwork lookup completed successfully, false otherwise.
+   */
+  bool GetArtForItems(CFileItemList& items);
 
   void UpdateArtForItem(int mediaId, const MediaType& mediaType) const;
 

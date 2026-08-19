@@ -17,6 +17,7 @@
 #include "Util.h"
 #include "VideoLibrary.h"
 #include "filesystem/Directory.h"
+#include "filesystem/MultiPathDirectory.h"
 #include "media/MediaLockState.h"
 #include "music/MusicFileItemClassify.h"
 #include "playlists/PlayListFileItemClassify.h"
@@ -133,9 +134,8 @@ JSONRPC_STATUS CFileOperations::GetDirectory(const std::string &method, ITranspo
     }
     const int totalFiles = filteredFiles.Size();
 
-    // Without an explicit sort the filesystem order is already final, so apply JSON-RPC limits
-    // before touching the media databases. Explicit library-data sorting still needs enrichment
-    // before pagination and therefore keeps the full-list path below.
+    // Without an explicit sort, limit the filesystem list before merging library data. Explicit
+    // library-data sorting needs the full enriched list and therefore keeps the full-list path.
     SortBy sortBy = SortBy::NONE;
     SortOrder sortOrder = SortOrder::NONE;
     SortAttribute sortAttributes = SortAttributeNone;
@@ -160,57 +160,120 @@ JSONRPC_STATUS CFileOperations::GetDirectory(const std::string &method, ITranspo
       prePaginated = true;
     }
 
+    const auto getVideoLookupPath = [](const CFileItemPtr& fileItem)
+    {
+      std::string path =
+          fileItem->IsOpticalMediaFile() ? fileItem->GetLocalMetadataPath() : fileItem->GetPath();
+      if (URIUtils::IsMultiPath(path))
+        path = CMultiPathDirectory::GetFirstPath(path);
+      return path;
+    };
+
+    CVideoDatabase videoDatabase;
     CFileItemList videoDbItems;
-    bool videoBatchLookup = false;
-    std::string videoContent;
+    bool hasVideoLibraryContent = false;
     if (needsLibraryLookup && !URIUtils::IsUPnP(items.GetPath()))
     {
-      CVideoDatabase videoDatabase;
       if (videoDatabase.Open())
       {
-        videoContent = videoDatabase.GetContentForPath(strPath);
+        const std::string videoContent = videoDatabase.GetContentForPath(items.GetPath());
         if (videoContent == "movies" || videoContent == "episodes" || videoContent == "tvshows" ||
             videoContent == "musicvideos")
         {
-          bool exactPageLookup = false;
-          constexpr int MAX_TARGETED_VIDEO_ITEMS = 200;
-          if (prePaginated && filesToProcess->Size() <= MAX_TARGETED_VIDEO_ITEMS)
-          {
-            bool allArt = false;
-            std::set<std::string> artTypes;
-            const CVariant& properties = parameterObject["properties"];
-            if (properties.isArray())
-            {
-              for (CVariant::const_iterator_array it = properties.begin_array();
-                   it != properties.end_array(); ++it)
-              {
-                if (!it->isString())
-                  continue;
+          const int requestedDetails = CVideoLibrary::GetDetailsFromJsonParameters(parameterObject);
+          const bool loadPageDetails = prePaginated && filesToProcess->Size() < totalFiles &&
+                                       requestedDetails != VideoDbDetailsNone;
+          videoDatabase.GetItemsForPath(videoContent, items.GetPath(), videoDbItems,
+                                        loadPageDetails ? VideoDbDetailsNone : requestedDetails);
+          videoDbItems.SetFastLookup(true);
 
-                const std::string property = it->asString();
-                if (property == "art")
-                  allArt = true;
-                else if (property == "thumbnail")
-                  artTypes.insert("thumb");
-                else if (property == "fanart")
-                  artTypes.insert("fanart");
-              }
+          // GetItemsForPath identifies library matches using the UI's established path logic. If
+          // the filesystem page is already known, load expensive relational details only for its
+          // matching IDs instead of every library item in the directory.
+          if (loadPageDetails)
+          {
+            std::set<int> mediaIds;
+            for (const auto& fileItem : *filesToProcess)
+            {
+              const CFileItemPtr libraryItem = videoDbItems.Get(getVideoLookupPath(fileItem));
+              if (libraryItem && libraryItem->HasVideoInfoTag())
+                mediaIds.insert(libraryItem->GetVideoInfoTag()->m_iDbId);
             }
 
-            exactPageLookup = videoDatabase.GetItemsForPaths(
-                videoContent, *filesToProcess,
-                CVideoLibrary::GetDetailsFromJsonParameters(parameterObject), allArt, artTypes,
-                videoDbItems);
-          }
+            if (!mediaIds.empty())
+            {
+              std::string idList;
+              for (const int mediaId : mediaIds)
+              {
+                if (!idList.empty())
+                  idList += ',';
+                idList += std::to_string(mediaId);
+              }
 
-          if (!exactPageLookup)
-          {
-            // Special paths (stack, multipath, optical media, folder movies), explicit sorting,
-            // or very large unbounded pages keep Kodi's established directory-level batch path.
-            videoDatabase.GetItemsForPath(videoContent, strPath, videoDbItems);
-            videoDbItems.SetFastLookup(true);
+              std::string idColumn;
+              if (videoContent == "movies")
+                idColumn = "idMovie";
+              else if (videoContent == "episodes")
+                idColumn = "idEpisode";
+              else if (videoContent == "tvshows")
+                idColumn = "idShow";
+              else
+                idColumn = "idMVideo";
+
+              const CVideoDatabase::Filter filter(idColumn + " IN (" + idList + ")");
+              CFileItemList detailedItems;
+              bool detailsLoaded = false;
+              if (videoContent == "movies")
+              {
+                detailsLoaded = videoDatabase.GetMoviesByWhere("videodb://movies/titles/", filter,
+                                                               detailedItems, SortDescription(),
+                                                               requestedDetails);
+              }
+              else if (videoContent == "episodes")
+              {
+                detailsLoaded = videoDatabase.GetEpisodesByWhere(
+                    "videodb://tvshows/titles/", filter, detailedItems, true, SortDescription(),
+                    requestedDetails);
+              }
+              else if (videoContent == "tvshows")
+              {
+                detailsLoaded = videoDatabase.GetTvShowsByWhere("videodb://tvshows/titles/", filter,
+                                                                detailedItems, SortDescription(),
+                                                                requestedDetails);
+              }
+              else
+              {
+                detailsLoaded = videoDatabase.GetMusicVideosByWhere(
+                    "videodb://musicvideos/titles/", filter, detailedItems, true, SortDescription(),
+                    requestedDetails);
+              }
+
+              if (detailsLoaded && !detailedItems.IsEmpty())
+              {
+                for (const auto& detailedItem : detailedItems)
+                  detailedItem->SetPath(detailedItem->GetVideoInfoTag()->m_basePath);
+                videoDbItems.Assign(detailedItems);
+                videoDbItems.SetFastLookup(true);
+              }
+            }
           }
-          videoBatchLookup = true;
+          hasVideoLibraryContent = true;
+        }
+      }
+    }
+
+    bool needsLibraryArt = false;
+    const CVariant& properties = parameterObject["properties"];
+    if (properties.isArray())
+    {
+      for (CVariant::const_iterator_array property = properties.begin_array();
+           property != properties.end_array(); ++property)
+      {
+        const std::string value = property->asString();
+        if (value == "art" || value == "thumbnail" || value == "fanart")
+        {
+          needsLibraryArt = true;
+          break;
         }
       }
     }
@@ -232,9 +295,9 @@ JSONRPC_STATUS CFileOperations::GetDirectory(const std::string &method, ITranspo
       const CFileItemPtr& currentItem = (*filesToProcess)[i];
       const std::string itemPath = currentItem->GetPath();
 
-      if (media == "files" && needsLibraryLookup && videoBatchLookup)
+      if (media == "files" && needsLibraryLookup && hasVideoLibraryContent)
       {
-        const CFileItemPtr libraryItem = videoDbItems.Get(itemPath);
+        const CFileItemPtr libraryItem = videoDbItems.Get(getVideoLookupPath(currentItem));
         if (libraryItem)
         {
           // Enrich the filesystem entry instead of replacing it. UpdateInfo copies the library
@@ -250,8 +313,8 @@ JSONRPC_STATUS CFileOperations::GetDirectory(const std::string &method, ITranspo
           continue;
         }
 
-        // The video batch is authoritative for video entries in this directory. Do not fall back
-        // to LoadVideoInfo() for misses or query the music database for arbitrary folders.
+        // The directory lookup is authoritative for video entries. Do not run per-item video
+        // lookups for misses or query the music database for arbitrary folders.
         if (VIDEO::IsVideo(*currentItem) || currentItem->IsFolder())
         {
           addFile(currentItem);
@@ -291,6 +354,27 @@ JSONRPC_STATUS CFileOperations::GetDirectory(const std::string &method, ITranspo
         else
           outputFiles.Add(currentItem);
       }
+    }
+
+    if (needsLibraryArt && hasVideoLibraryContent)
+    {
+      // Artwork is serialized only after sorting and limiting. Preload the same final page in one
+      // database query so the regular item handler does not issue a query for every video item.
+      if (hasExplicitSort)
+        outputFiles.Sort(sortBy, sortOrder, sortAttributes);
+
+      int start = 0;
+      int end = outputFiles.Size();
+      if (!prePaginated)
+      {
+        CVariant ignoredLimits;
+        HandleLimits(parameterObject, ignoredLimits, totalFiles, start, end);
+      }
+
+      CFileItemList artItems;
+      for (int i = start; i < end; ++i)
+        artItems.Add(outputFiles[i]);
+      videoDatabase.GetArtForItems(artItems);
     }
 
     // Check if the "properties" list exists
