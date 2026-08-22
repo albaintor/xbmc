@@ -431,7 +431,7 @@ void CFileItemHandler::HandleFileItem(const char* ID,
       if (allowFile)
       {
         // Use the browsed path for folders, not the media tag path.
-        if (fields.contains("filetype") && item->IsFolder())
+        if (item->IsFolder())
           object["file"] = item->GetPath().c_str();
         else
         {
@@ -441,10 +441,10 @@ void CFileItemHandler::HandleFileItem(const char* ID,
             object["file"] = item->GetMusicInfoTag()->GetURL().c_str();
           if (item->HasPVRTimerInfoTag() && !item->GetPVRTimerInfoTag()->Path().empty())
             object["file"] = item->GetPVRTimerInfoTag()->Path().c_str();
-
-          if (!object.isMember("file"))
-            object["file"] = item->GetDynPath().c_str();
         }
+
+        if (!object.isMember("file"))
+          object["file"] = item->GetDynPath().c_str();
       }
       fields.erase(fileField);
     }

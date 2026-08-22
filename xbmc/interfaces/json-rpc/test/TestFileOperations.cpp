@@ -11,9 +11,11 @@
 #include "interfaces/json-rpc/FileOperations.h"
 #include "utils/Variant.h"
 #include "video/VideoDatabase.h"
+#include "video/VideoInfoTag.h"
 
 #include <initializer_list>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 
@@ -23,6 +25,12 @@ using namespace JSONRPC;
 
 namespace
 {
+class CTestFileItemHandler : public CFileItemHandler
+{
+public:
+  using CFileItemHandler::HandleFileItem;
+};
+
 CVariant ParamsWithProperties(std::initializer_list<std::string_view> properties)
 {
   CVariant params(CVariant::VariantTypeObject);
@@ -51,6 +59,20 @@ TEST(TestFileOperations, VideoPropertiesNeedLibraryLookup)
   EXPECT_TRUE(CFileOperations::NeedsLibraryLookup(ParamsWithProperties({"thumbnail"})));
   EXPECT_TRUE(CFileOperations::NeedsLibraryLookup(ParamsWithProperties({"cast"})));
   EXPECT_TRUE(CFileOperations::NeedsLibraryLookup(ParamsWithProperties({"file", "streamdetails"})));
+}
+
+TEST(TestFileOperations, FolderUsesBrowsedPathWithoutFileTypeProperty)
+{
+  const std::string browsedPath = "smb://server/videos/movies/";
+  const auto item = std::make_shared<CFileItem>(browsedPath, true);
+  item->GetVideoInfoTag()->SetPath("videodb://movies/titles/1/");
+
+  CVariant result(CVariant::VariantTypeObject);
+  CTestFileItemHandler::HandleFileItem(nullptr, true, "filedetails", item,
+                                       CVariant(CVariant::VariantTypeObject),
+                                       std::set<std::string>{"file"}, result, false);
+
+  EXPECT_EQ(browsedPath, result["filedetails"]["file"].asString());
 }
 
 TEST(TestFileOperations, MatchesVideoDatabaseItemByFilesystemPath)
