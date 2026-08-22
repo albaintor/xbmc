@@ -345,30 +345,48 @@ void CFileItemHandler::HandleFileItemList(const char *ID, bool allowFile, const 
       fields.insert(field->asString());
   }
 
-  CThumbLoader* thumbLoader = NULL;
-  for (int i = start; i < end && thumbLoader == NULL; ++i)
+  CFileItemList videoArtItems;
+  bool needsMusicArtLoader = false;
+  for (int i = start; i < end; ++i)
   {
     const CFileItemPtr item = items.Get(i);
     if (!item || !NeedsLibraryArtLoader(*item, fields))
       continue;
 
     if (item->HasVideoInfoTag())
-      thumbLoader = new CVideoThumbLoader();
+      videoArtItems.Add(item);
     else if (item->HasMusicInfoTag())
-      thumbLoader = new CMusicThumbLoader();
+      needsMusicArtLoader = true;
   }
 
-  if (thumbLoader != NULL)
-    thumbLoader->OnLoaderStart();
+  std::unique_ptr<CVideoThumbLoader> videoThumbLoader;
+  if (!videoArtItems.IsEmpty())
+  {
+    videoThumbLoader = std::make_unique<CVideoThumbLoader>();
+    videoThumbLoader->OnLoaderStart();
+    videoThumbLoader->FillLibraryArt(videoArtItems, 0, videoArtItems.Size());
+  }
+
+  std::unique_ptr<CMusicThumbLoader> musicThumbLoader;
+  if (needsMusicArtLoader)
+  {
+    musicThumbLoader = std::make_unique<CMusicThumbLoader>();
+    musicThumbLoader->OnLoaderStart();
+  }
 
   result[resultname].reserve(static_cast<size_t>(end - start));
   for (int i = start; i < end; i++)
   {
     CFileItemPtr item = items.Get(i);
-    HandleFileItem(ID, allowFile, resultname, item, parameterObject, fields, result, true, thumbLoader);
-  }
+    CThumbLoader* thumbLoader = nullptr;
+    if (item && item->HasVideoInfoTag())
+      thumbLoader = videoThumbLoader.get();
+    else if (item && item->HasMusicInfoTag())
+      thumbLoader = musicThumbLoader.get();
 
-  delete thumbLoader;
+    HandleFileItem(ID, allowFile, resultname, item, parameterObject, fields, result, true,
+                   thumbLoader);
+  }
 }
 
 void CFileItemHandler::HandleFileItem(const char* ID,

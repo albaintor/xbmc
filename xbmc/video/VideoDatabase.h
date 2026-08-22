@@ -164,6 +164,8 @@ class CVideoDatabase : public CDatabase
   };
 
 public:
+  using MediaId = std::pair<MediaType, int>;
+  using ArtByMediaId = std::map<MediaId, KODI::ART::Artwork>;
 
   class CActor    // used for actor retrieval for non-master users
   {
@@ -583,6 +585,14 @@ public:
                        CFileItemList& items,
                        int getDetails = VideoDbDetailsNone);
 
+  /*! \brief Find the database item matching a browsed filesystem item.
+   * \param item filesystem item to match.
+   * \param dbItems items returned by GetItemsForPath, with fast lookup enabled.
+   * \return matching database item, or null if the item is not in the library.
+   */
+  static std::shared_ptr<CFileItem> GetMatchingItemForPath(const CFileItem& item,
+                                                           const CFileItemList& dbItems);
+
   /*! \brief Check whether a given scraper is in use.
    \param scraperID the scraper to check for.
    \return true if the scraper is in use, false otherwise.
@@ -855,11 +865,12 @@ public:
   bool GetArtForItem(int mediaId, const MediaType& mediaType, KODI::ART::Artwork& art);
   std::string GetArtForItem(int mediaId, const MediaType &mediaType, const std::string &artType);
 
-  /*! \brief Retrieve library artwork for a list of video items in a single query.
-   * \param items video items to populate with direct and related library artwork.
+  /*! \brief Retrieve library artwork for multiple media items in a single query.
+   * \param mediaIds media type and database id pairs to retrieve artwork for.
+   * \param art returned artwork, keyed by media type and database id.
    * \return true if the artwork lookup completed successfully, false otherwise.
    */
-  bool GetArtForItems(CFileItemList& items);
+  bool GetArtForItems(const std::set<MediaId>& mediaIds, ArtByMediaId& art);
 
   void UpdateArtForItem(int mediaId, const MediaType& mediaType) const;
 

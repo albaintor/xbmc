@@ -5412,186 +5412,56 @@ bool CVideoDatabase::SetArtForItem(int mediaId,
 
 bool CVideoDatabase::GetArtForItem(int mediaId, const MediaType& mediaType, KODI::ART::Artwork& art)
 {
-  try
-  {
-    if (nullptr == m_pDB)
-      return false;
-    if (nullptr == m_pDS2)
-      return false; // using dataset 2 as we're likely called in loops on dataset 1
+  ArtByMediaId artwork;
+  if (!GetArtForItems({{mediaType, mediaId}}, artwork))
+    return false;
 
-    std::string sql = PrepareSQL("SELECT type,url FROM art WHERE media_id=%i AND media_type='%s'", mediaId, mediaType.c_str());
-
-    m_pDS2->query(sql);
-    while (!m_pDS2->eof())
-    {
-      art.try_emplace(m_pDS2->fv(0).get_asString(), m_pDS2->fv(1).get_asString());
-      m_pDS2->next();
-    }
-    m_pDS2->close();
-    return true;
-  }
-  catch (...)
-  {
-    CLog::LogF(LOGERROR, "({}) failed", mediaId);
-  }
-  return false;
+  const auto it = artwork.find({mediaType, mediaId});
+  if (it != artwork.end())
+    art.insert(it->second.begin(), it->second.end());
+  return true;
 }
 
-bool CVideoDatabase::GetArtForItems(CFileItemList& items)
+bool CVideoDatabase::GetArtForItems(const std::set<MediaId>& mediaIds, ArtByMediaId& art)
 {
-  using ArtKey = std::pair<MediaType, int>;
-
-  struct ArtRequest
-  {
-    CFileItemPtr item;
-    ArtKey direct;
-    ArtKey owner;
-    ArtKey tvShow;
-    ArtKey season;
-    ArtKey set;
-    bool hasDirect{false};
-    bool hasOwner{false};
-    bool hasTvShow{false};
-    bool hasSeason{false};
-    bool hasSet{false};
-  };
-
   try
   {
     if (!m_pDB || !m_pDS2)
       return false;
 
-    std::vector<ArtRequest> requests;
-    std::map<MediaType, std::set<int>> mediaIds;
-    const auto addKey = [&mediaIds](const ArtKey& key)
+    if (mediaIds.empty())
+      return true;
+
+    std::map<MediaType, std::vector<std::string>> idsByMediaType;
+    for (const auto& [mediaType, mediaId] : mediaIds)
     {
-      if (key.second >= 0 && !key.first.empty())
-        mediaIds[key.first].insert(key.second);
-    };
-
-    for (const auto& item : items)
-    {
-      if (!item->HasVideoInfoTag())
-        continue;
-
-      const CVideoInfoTag& tag = *item->GetVideoInfoTag();
-      if (tag.m_iDbId < 0 || tag.m_type.empty())
-        continue;
-
-      ArtRequest request{.item = item};
-      if (VIDEO::IsVideoAssetFile(*item))
-      {
-        request.direct = {MediaTypeVideoVersion, tag.m_iFileId};
-        request.hasDirect = tag.m_iFileId >= 0;
-        if (!item->GetProperty("noartfallbacktoowner").asBoolean(false) &&
-            tag.GetAssetInfo().GetType() == VideoAssetType::VERSION)
-        {
-          request.owner = {tag.m_type, tag.m_iDbId};
-          request.hasOwner = true;
-        }
-      }
-      else
-      {
-        request.direct = {tag.m_type, tag.m_iDbId};
-        request.hasDirect = true;
-      }
-
-      if ((tag.m_type == MediaTypeEpisode || tag.m_type == MediaTypeSeason) &&
-          !item->HasArt("tvshow.fanart") && tag.m_iIdShow >= 0)
-      {
-        request.tvShow = {MediaTypeTvShow, tag.m_iIdShow};
-        request.hasTvShow = true;
-      }
-      if (tag.m_type == MediaTypeEpisode && !item->HasArt("season.poster") && tag.m_iSeason > -1 &&
-          tag.m_iIdSeason >= 0)
-      {
-        request.season = {MediaTypeSeason, tag.m_iIdSeason};
-        request.hasSeason = true;
-      }
-      if (tag.m_type == MediaTypeMovie && !item->HasArt("set.fanart") && tag.m_set.GetID() >= 0)
-      {
-        request.set = {MediaTypeVideoCollection, tag.m_set.GetID()};
-        request.hasSet = true;
-      }
-
-      if (request.hasDirect)
-        addKey(request.direct);
-      if (request.hasOwner)
-        addKey(request.owner);
-      if (request.hasTvShow)
-        addKey(request.tvShow);
-      if (request.hasSeason)
-        addKey(request.season);
-      if (request.hasSet)
-        addKey(request.set);
-      requests.emplace_back(std::move(request));
+      if (mediaId >= 0 && !mediaType.empty())
+        idsByMediaType[mediaType].emplace_back(std::to_string(mediaId));
     }
 
-    KODI::ART::Artwork emptyArt;
-    std::map<ArtKey, KODI::ART::Artwork> artwork;
-    if (!mediaIds.empty())
+    std::vector<std::string> conditions;
+    conditions.reserve(idsByMediaType.size());
+    for (const auto& [mediaType, ids] : idsByMediaType)
     {
-      std::string sql{"SELECT media_type, media_id, type, url FROM art WHERE "};
-      bool firstMediaType = true;
-      for (const auto& [mediaType, ids] : mediaIds)
-      {
-        if (!firstMediaType)
-          sql += " OR ";
-        firstMediaType = false;
-
-        std::string idList;
-        for (const int id : ids)
-        {
-          if (!idList.empty())
-            idList += ',';
-          idList += std::to_string(id);
-        }
-        sql +=
-            PrepareSQL("(media_type='%s' AND media_id IN (%s))", mediaType.c_str(), idList.c_str());
-      }
-
-      if (!m_pDS2->query(sql))
-        return false;
-
-      while (!m_pDS2->eof())
-      {
-        const ArtKey key{m_pDS2->fv(0).get_asString(), m_pDS2->fv(1).get_asInt()};
-        artwork[key][m_pDS2->fv(2).get_asString()] = m_pDS2->fv(3).get_asString();
-        m_pDS2->next();
-      }
-      m_pDS2->close();
+      conditions.emplace_back(PrepareSQL("(media_type='%s' AND media_id IN (%s))",
+                                         mediaType.c_str(), StringUtils::Join(ids, ",").c_str()));
     }
 
-    const auto getArt = [&artwork, &emptyArt](const ArtKey& key) -> const KODI::ART::Artwork&
+    if (conditions.empty())
+      return true;
+
+    const std::string sql = "SELECT media_type, media_id, type, url FROM art WHERE " +
+                            StringUtils::Join(conditions, " OR ");
+    if (!m_pDS2->query(sql))
+      return false;
+
+    while (!m_pDS2->eof())
     {
-      const auto it = artwork.find(key);
-      return it != artwork.end() ? it->second : emptyArt;
-    };
-
-    for (const auto& request : requests)
-    {
-      if (request.hasOwner)
-        request.item->AppendArt(getArt(request.owner));
-      if (request.hasDirect)
-        request.item->AppendArt(getArt(request.direct));
-
-      if (request.hasTvShow)
-      {
-        const KODI::ART::Artwork& art = getArt(request.tvShow);
-        if (!art.empty())
-        {
-          request.item->AppendArt(art, MediaTypeTvShow);
-          request.item->SetArtFallback("fanart", "tvshow.fanart");
-          request.item->SetArtFallback("tvshow.thumb", "tvshow.poster");
-        }
-      }
-      if (request.hasSeason)
-        request.item->AppendArt(getArt(request.season), MediaTypeSeason);
-      if (request.hasSet)
-        request.item->AppendArt(getArt(request.set), MediaTypeVideoCollection);
-
-      request.item->SetProperty("libraryartfilled", true);
+      const MediaId key{m_pDS2->fv(0).get_asString(), m_pDS2->fv(1).get_asInt()};
+      art[key].try_emplace(m_pDS2->fv(2).get_asString(), m_pDS2->fv(3).get_asString());
+      m_pDS2->next();
     }
+    m_pDS2->close();
 
     return true;
   }
@@ -12089,6 +11959,15 @@ bool CVideoDatabase::GetItemsForPath(const std::string& content,
   for (const auto& item : items)
     item->SetPath(item->GetVideoInfoTag()->m_basePath);
   return !items.IsEmpty();
+}
+
+std::shared_ptr<CFileItem> CVideoDatabase::GetMatchingItemForPath(const CFileItem& item,
+                                                                  const CFileItemList& dbItems)
+{
+  std::string path = item.IsOpticalMediaFile() ? item.GetLocalMetadataPath() : item.GetPath();
+  if (URIUtils::IsMultiPath(path))
+    path = CMultiPathDirectory::GetFirstPath(path);
+  return dbItems.Get(path);
 }
 
 void CVideoDatabase::AppendIdLinkFilter(const char* field,

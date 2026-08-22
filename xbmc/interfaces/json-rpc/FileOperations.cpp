@@ -17,7 +17,6 @@
 #include "Util.h"
 #include "VideoLibrary.h"
 #include "filesystem/Directory.h"
-#include "filesystem/MultiPathDirectory.h"
 #include "media/MediaLockState.h"
 #include "music/MusicFileItemClassify.h"
 #include "playlists/PlayListFileItemClassify.h"
@@ -123,52 +122,6 @@ JSONRPC_STATUS CFileOperations::GetDirectory(const std::string &method, ITranspo
     const bool needsLibraryLookup =
         media == "files" && CFileOperations::NeedsLibraryLookup(parameterObject);
 
-    // Filter first. This is the list against which JSON-RPC pagination is defined.
-    CFileItemList filteredFiles;
-    filteredFiles.SetPath(items.GetPath());
-    RegExpCache cache;
-    for (int i = 0; i < items.Size(); ++i)
-    {
-      if (!CUtil::ExcludeFileOrFolder(items[i]->GetPath(), regexps, &cache))
-        filteredFiles.Add(items[i]);
-    }
-    const int totalFiles = filteredFiles.Size();
-
-    // Without an explicit sort, limit the filesystem list before merging library data. Explicit
-    // library-data sorting needs the full enriched list and therefore keeps the full-list path.
-    SortBy sortBy = SortBy::NONE;
-    SortOrder sortOrder = SortOrder::NONE;
-    SortAttribute sortAttributes = SortAttributeNone;
-    const bool hasExplicitSort =
-        ParseSorting(parameterObject, sortBy, sortOrder, sortAttributes) && sortBy != SortBy::NONE;
-
-    CFileItemList pageFiles;
-    CFileItemList* filesToProcess = &filteredFiles;
-    bool prePaginated = false;
-    if (needsLibraryLookup && !hasExplicitSort)
-    {
-      int start = 0;
-      int end = totalFiles;
-      CVariant ignoredLimits;
-      HandleLimits(parameterObject, ignoredLimits, totalFiles, start, end);
-
-      pageFiles.SetPath(filteredFiles.GetPath());
-      for (int i = start; i < end; ++i)
-        pageFiles.Add(filteredFiles[i]);
-
-      filesToProcess = &pageFiles;
-      prePaginated = true;
-    }
-
-    const auto getVideoLookupPath = [](const CFileItemPtr& fileItem)
-    {
-      std::string path =
-          fileItem->IsOpticalMediaFile() ? fileItem->GetLocalMetadataPath() : fileItem->GetPath();
-      if (URIUtils::IsMultiPath(path))
-        path = CMultiPathDirectory::GetFirstPath(path);
-      return path;
-    };
-
     CVideoDatabase videoDatabase;
     CFileItemList videoDbItems;
     bool hasVideoLibraryContent = false;
@@ -181,105 +134,16 @@ JSONRPC_STATUS CFileOperations::GetDirectory(const std::string &method, ITranspo
             videoContent == "musicvideos")
         {
           const int requestedDetails = CVideoLibrary::GetDetailsFromJsonParameters(parameterObject);
-          const bool loadPageDetails = prePaginated && filesToProcess->Size() < totalFiles &&
-                                       requestedDetails != VideoDbDetailsNone;
           videoDatabase.GetItemsForPath(videoContent, items.GetPath(), videoDbItems,
-                                        loadPageDetails ? VideoDbDetailsNone : requestedDetails);
+                                        requestedDetails);
           videoDbItems.SetFastLookup(true);
-
-          // GetItemsForPath identifies library matches using the UI's established path logic. If
-          // the filesystem page is already known, load expensive relational details only for its
-          // matching IDs instead of every library item in the directory.
-          if (loadPageDetails)
-          {
-            std::set<int> mediaIds;
-            for (const auto& fileItem : *filesToProcess)
-            {
-              const CFileItemPtr libraryItem = videoDbItems.Get(getVideoLookupPath(fileItem));
-              if (libraryItem && libraryItem->HasVideoInfoTag())
-                mediaIds.insert(libraryItem->GetVideoInfoTag()->m_iDbId);
-            }
-
-            if (!mediaIds.empty())
-            {
-              std::string idList;
-              for (const int mediaId : mediaIds)
-              {
-                if (!idList.empty())
-                  idList += ',';
-                idList += std::to_string(mediaId);
-              }
-
-              std::string idColumn;
-              if (videoContent == "movies")
-                idColumn = "idMovie";
-              else if (videoContent == "episodes")
-                idColumn = "idEpisode";
-              else if (videoContent == "tvshows")
-                idColumn = "idShow";
-              else
-                idColumn = "idMVideo";
-
-              const CVideoDatabase::Filter filter(idColumn + " IN (" + idList + ")");
-              CFileItemList detailedItems;
-              bool detailsLoaded = false;
-              if (videoContent == "movies")
-              {
-                detailsLoaded = videoDatabase.GetMoviesByWhere("videodb://movies/titles/", filter,
-                                                               detailedItems, SortDescription(),
-                                                               requestedDetails);
-              }
-              else if (videoContent == "episodes")
-              {
-                detailsLoaded = videoDatabase.GetEpisodesByWhere(
-                    "videodb://tvshows/titles/", filter, detailedItems, true, SortDescription(),
-                    requestedDetails);
-              }
-              else if (videoContent == "tvshows")
-              {
-                detailsLoaded = videoDatabase.GetTvShowsByWhere("videodb://tvshows/titles/", filter,
-                                                                detailedItems, SortDescription(),
-                                                                requestedDetails);
-              }
-              else
-              {
-                detailsLoaded = videoDatabase.GetMusicVideosByWhere(
-                    "videodb://musicvideos/titles/", filter, detailedItems, true, SortDescription(),
-                    requestedDetails);
-              }
-
-              if (detailsLoaded && !detailedItems.IsEmpty())
-              {
-                for (const auto& detailedItem : detailedItems)
-                  detailedItem->SetPath(detailedItem->GetVideoInfoTag()->m_basePath);
-                videoDbItems.Assign(detailedItems);
-                videoDbItems.SetFastLookup(true);
-              }
-            }
-          }
           hasVideoLibraryContent = true;
         }
       }
     }
 
-    bool needsLibraryArt = false;
-    const CVariant& properties = parameterObject["properties"];
-    if (properties.isArray())
-    {
-      for (CVariant::const_iterator_array property = properties.begin_array();
-           property != properties.end_array(); ++property)
-      {
-        const std::string value = property->asString();
-        if (value == "art" || value == "thumbnail" || value == "fanart")
-        {
-          needsLibraryArt = true;
-          break;
-        }
-      }
-    }
-
     CFileItemList outputFiles;
-    outputFiles.SetPath(filesToProcess->GetPath());
+    outputFiles.SetPath(items.GetPath());
     const auto addFile = [&outputFiles](const CFileItemPtr& fileItem)
     {
       if (fileItem->IsSmb())
@@ -290,14 +154,19 @@ JSONRPC_STATUS CFileOperations::GetDirectory(const std::string &method, ITranspo
       outputFiles.Add(fileItem);
     };
 
-    for (int i = 0; i < filesToProcess->Size(); ++i)
+    RegExpCache cache;
+    for (int i = 0; i < items.Size(); ++i)
     {
-      const CFileItemPtr& currentItem = (*filesToProcess)[i];
+      const CFileItemPtr& currentItem = items[i];
+      if (CUtil::ExcludeFileOrFolder(currentItem->GetPath(), regexps, &cache))
+        continue;
+
       const std::string itemPath = currentItem->GetPath();
 
       if (media == "files" && needsLibraryLookup && hasVideoLibraryContent)
       {
-        const CFileItemPtr libraryItem = videoDbItems.Get(getVideoLookupPath(currentItem));
+        const CFileItemPtr libraryItem =
+            CVideoDatabase::GetMatchingItemForPath(*currentItem, videoDbItems);
         if (libraryItem)
         {
           // Enrich the filesystem entry instead of replacing it. UpdateInfo copies the library
@@ -356,27 +225,6 @@ JSONRPC_STATUS CFileOperations::GetDirectory(const std::string &method, ITranspo
       }
     }
 
-    if (needsLibraryArt && hasVideoLibraryContent)
-    {
-      // Artwork is serialized only after sorting and limiting. Preload the same final page in one
-      // database query so the regular item handler does not issue a query for every video item.
-      if (hasExplicitSort)
-        outputFiles.Sort(sortBy, sortOrder, sortAttributes);
-
-      int start = 0;
-      int end = outputFiles.Size();
-      if (!prePaginated)
-      {
-        CVariant ignoredLimits;
-        HandleLimits(parameterObject, ignoredLimits, totalFiles, start, end);
-      }
-
-      CFileItemList artItems;
-      for (int i = start; i < end; ++i)
-        artItems.Add(outputFiles[i]);
-      videoDatabase.GetArtForItems(artItems);
-    }
-
     // Check if the "properties" list exists
     // and make sure it contains the "file" and "filetype"
     // fields
@@ -399,12 +247,7 @@ JSONRPC_STATUS CFileOperations::GetDirectory(const std::string &method, ITranspo
       param["properties"].append("file");
     param["properties"].append("filetype");
 
-    // Preserve the original filtered item count when pagination is applied before library
-    // enrichment.
-    if (prePaginated)
-      HandleFileItemList("id", true, "files", outputFiles, param, result, totalFiles, false);
-    else
-      HandleFileItemList("id", true, "files", outputFiles, param, result);
+    HandleFileItemList("id", true, "files", outputFiles, param, result);
 
     return OK;
   }
@@ -560,26 +403,8 @@ bool CFileOperations::FillFileItem(
 
   if (!strFilename.empty() && (CDirectory::Exists(strFilename) || CFileUtils::Exists(strFilename)))
   {
-    const auto fillVideoItem = [&]()
-    {
-      CVideoDatabase videoDatabase;
-      if (!videoDatabase.Open())
-        return false;
-
-      CVideoInfoTag details;
-      if (videoDatabase.LoadVideoInfo(strFilename, details) ||
-          (originalItem->IsFolder() &&
-           videoDatabase.GetTvShowInfo(strFilename, details, -1, item.get())))
-      {
-        item->SetFromVideoInfoTag(details);
-        item->SetDynPath(strFilename);
-        return true;
-      }
-      return false;
-    };
-
     if (media == "video")
-      status = fillVideoItem();
+      status = CVideoLibrary::FillFileItem(strFilename, item, parameterObject);
     else if (media == "music")
       status = CAudioLibrary::FillFileItem(strFilename, item, parameterObject);
     else if (media == "files")
@@ -587,7 +412,7 @@ bool CFileOperations::FillFileItem(
       // An untyped files listing can contain either media kind. Use Kodi's classifiers rather
       // than MIME/extension heuristics; a folder may legitimately match either library.
       if (!MUSIC::IsAudio(*originalItem))
-        status = fillVideoItem();
+        status = CVideoLibrary::FillFileItem(strFilename, item, parameterObject);
       if (!status && !VIDEO::IsVideo(*originalItem))
         status = CAudioLibrary::FillFileItem(strFilename, item, parameterObject);
     }
