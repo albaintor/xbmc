@@ -619,7 +619,8 @@
       "original",
       "stretch16x9nonlin",
       "zoom120width",
-      "zoom110width"
+      "zoom110width",
+      "custom"
     ]
   },
   "Player.CustomViewMode": {
@@ -824,6 +825,142 @@
       "isimpaired"
     ]
   },
+  "Player.VideoSettings": {
+    "type": "object",
+    "properties": {
+      "audiodelay": {
+        "type": "number"
+      },
+      "volumeamplification": {
+        "type": "number",
+        "minimum": 0.0,
+        "maximum": 60.0
+      },
+      "subtitledelay": {
+        "type": "number"
+      },
+      "subtitleverticalposition": {
+        "type": "integer"
+      },
+      "viewmode": {
+        "$ref": "#/$defs/Player.ViewMode"
+      },
+      "zoom": {
+        "type": "number",
+        "minimum": 0.5,
+        "maximum": 2.0
+      },
+      "pixelratio": {
+        "type": "number",
+        "minimum": 0.5,
+        "maximum": 2.0
+      },
+      "verticalshift": {
+        "type": "number",
+        "minimum": -2.0,
+        "maximum": 2.0
+      },
+      "nonlinearstretch": {
+        "type": "boolean"
+      },
+      "interlacemethod": {
+        "type": "integer",
+        "enum": [
+          0,
+          1,
+          2,
+          4,
+          6,
+          7,
+          8,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          22,
+          23,
+          24,
+          32
+        ]
+      },
+      "scalingmethod": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 18
+      },
+      "brightness": {
+        "type": "number",
+        "minimum": 0.0,
+        "maximum": 100.0
+      },
+      "contrast": {
+        "type": "number",
+        "minimum": 0.0,
+        "maximum": 100.0
+      },
+      "gamma": {
+        "type": "number",
+        "minimum": 0.0,
+        "maximum": 100.0
+      },
+      "noisereduction": {
+        "type": "number",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
+      "sharpness": {
+        "type": "number",
+        "minimum": -1.0,
+        "maximum": 1.0
+      },
+      "postprocess": {
+        "type": "boolean"
+      },
+      "tonemapmethod": {
+        "type": "integer",
+        "enum": [
+          0,
+          1,
+          2,
+          3
+        ]
+      },
+      "tonemapparam": {
+        "type": "number",
+        "minimum": 0.1,
+        "maximum": 5.0
+      },
+      "stereomode": {
+        "type": "integer",
+        "enum": [
+          0,
+          1,
+          2
+        ]
+      },
+      "stereoinvert": {
+        "type": "boolean"
+      },
+      "orientation": {
+        "type": "integer",
+        "enum": [
+          0,
+          90,
+          180,
+          270
+        ]
+      },
+      "centermixlevel": {
+        "type": "integer",
+        "minimum": -10,
+        "maximum": 30
+      }
+    },
+    "minProperties": 1,
+    "additionalProperties": false
+  },
   "Player.Property.Name": {
     "type": "string",
     "enum": [
@@ -852,6 +989,29 @@
       "live",
       "currentvideostream",
       "videostreams",
+      "audiodelay",
+      "volumeamplification",
+      "subtitledelay",
+      "subtitleverticalposition",
+      "viewmode",
+      "zoom",
+      "pixelratio",
+      "verticalshift",
+      "nonlinearstretch",
+      "interlacemethod",
+      "scalingmethod",
+      "brightness",
+      "contrast",
+      "gamma",
+      "noisereduction",
+      "sharpness",
+      "postprocess",
+      "tonemapmethod",
+      "tonemapparam",
+      "stereomode",
+      "stereoinvert",
+      "orientation",
+      "centermixlevel",
       "cachepercentage"
     ]
   },
@@ -962,6 +1122,132 @@
       },
       "live": {
         "type": "boolean"
+      },
+      "audiodelay": {
+        "type": "number"
+      },
+      "volumeamplification": {
+        "type": "number",
+        "minimum": 0.0,
+        "maximum": 60.0
+      },
+      "subtitledelay": {
+        "type": "number"
+      },
+      "subtitleverticalposition": {
+        "type": "integer"
+      },
+      "viewmode": {
+        "$ref": "#/$defs/Player.ViewMode"
+      },
+      "zoom": {
+        "type": "number",
+        "minimum": 0.5,
+        "maximum": 2.0
+      },
+      "pixelratio": {
+        "type": "number",
+        "minimum": 0.5,
+        "maximum": 2.0
+      },
+      "verticalshift": {
+        "type": "number",
+        "minimum": -2.0,
+        "maximum": 2.0
+      },
+      "nonlinearstretch": {
+        "type": "boolean"
+      },
+      "interlacemethod": {
+        "type": "integer",
+        "enum": [
+          0,
+          1,
+          2,
+          4,
+          6,
+          7,
+          8,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          22,
+          23,
+          24,
+          32
+        ]
+      },
+      "scalingmethod": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 18
+      },
+      "brightness": {
+        "type": "number",
+        "minimum": 0.0,
+        "maximum": 100.0
+      },
+      "contrast": {
+        "type": "number",
+        "minimum": 0.0,
+        "maximum": 100.0
+      },
+      "gamma": {
+        "type": "number",
+        "minimum": 0.0,
+        "maximum": 100.0
+      },
+      "noisereduction": {
+        "type": "number",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
+      "sharpness": {
+        "type": "number",
+        "minimum": -1.0,
+        "maximum": 1.0
+      },
+      "postprocess": {
+        "type": "boolean"
+      },
+      "tonemapmethod": {
+        "type": "integer",
+        "enum": [
+          0,
+          1,
+          2,
+          3
+        ]
+      },
+      "tonemapparam": {
+        "type": "number",
+        "minimum": 0.1,
+        "maximum": 5.0
+      },
+      "stereomode": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9
+      },
+      "stereoinvert": {
+        "type": "boolean"
+      },
+      "orientation": {
+        "type": "integer",
+        "enum": [
+          0,
+          90,
+          180,
+          270
+        ]
+      },
+      "centermixlevel": {
+        "type": "integer",
+        "minimum": -10,
+        "maximum": 30
       },
       "cachepercentage": {
         "$ref": "#/$defs/Player.Position.Percentage"

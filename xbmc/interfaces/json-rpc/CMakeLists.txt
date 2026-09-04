@@ -13,6 +13,7 @@ set(SOURCES AddonsOperations.cpp
             PlaybackModes.cpp
             PlayerIds.cpp
             PlayerOperations.cpp
+            PlayerVideoSettings.cpp
             PlaylistOperations.cpp
             ProfilesOperations.cpp
             PVREpgFields.cpp
@@ -42,6 +43,7 @@ set(HEADERS AddonsOperations.h
             PlaybackModes.h
             PlayerIds.h
             PlayerOperations.h
+            PlayerVideoSettings.h
             PlaylistOperations.h
             ProfilesOperations.h
             PVREpgFields.h

@@ -15,14 +15,116 @@
 #include "cores/playercorefactory/PlayerCoreFactory.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
+#include "interfaces/AnnouncementManager.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/Variant.h"
 #include "video/VideoFileItemClassify.h"
 
 #include <mutex>
 
 using namespace KODI;
 using namespace std::chrono_literals;
+
+namespace
+{
+const char* ViewModeName(int mode)
+{
+  switch (static_cast<ViewMode>(mode))
+  {
+    case ViewModeNormal:
+      return "normal";
+    case ViewModeZoom:
+      return "zoom";
+    case ViewModeStretch4x3:
+      return "stretch4x3";
+    case ViewModeWideZoom:
+      return "widezoom";
+    case ViewModeStretch16x9:
+      return "stretch16x9";
+    case ViewModeOriginal:
+      return "original";
+    case ViewModeStretch16x9Nonlin:
+      return "stretch16x9nonlin";
+    case ViewModeZoom120Width:
+      return "zoom120width";
+    case ViewModeZoom110Width:
+      return "zoom110width";
+    case ViewModeCustom:
+    default:
+      return "custom";
+  }
+}
+
+void AnnounceVideoSettingsChanged(CApplicationPlayer& appPlayer,
+                                  const CVideoSettings& previous,
+                                  const CVideoSettings& current)
+{
+  if (!appPlayer.IsPlayingVideo())
+    return;
+
+  CVariant property(CVariant::VariantTypeObject);
+  bool changed = false;
+
+#define ADD_CHANGED(member, name) \
+  if (previous.member != current.member) \
+  { \
+    property[name] = current.member; \
+    changed = true; \
+  }
+
+  ADD_CHANGED(m_AudioDelay, "audiodelay");
+  ADD_CHANGED(m_VolumeAmplification, "volumeamplification");
+  ADD_CHANGED(m_SubtitleDelay, "subtitledelay");
+  ADD_CHANGED(m_subtitleVerticalPosition, "subtitleverticalposition");
+  if (previous.m_ViewMode != current.m_ViewMode)
+  {
+    property["viewmode"] = ViewModeName(current.m_ViewMode);
+    changed = true;
+  }
+  ADD_CHANGED(m_CustomZoomAmount, "zoom");
+  ADD_CHANGED(m_CustomPixelRatio, "pixelratio");
+  ADD_CHANGED(m_CustomVerticalShift, "verticalshift");
+  ADD_CHANGED(m_CustomNonLinStretch, "nonlinearstretch");
+  if (previous.m_InterlaceMethod != current.m_InterlaceMethod)
+  {
+    property["interlacemethod"] = static_cast<int>(current.m_InterlaceMethod);
+    changed = true;
+  }
+  if (previous.m_ScalingMethod != current.m_ScalingMethod)
+  {
+    property["scalingmethod"] = static_cast<int>(current.m_ScalingMethod);
+    changed = true;
+  }
+  ADD_CHANGED(m_Brightness, "brightness");
+  ADD_CHANGED(m_Contrast, "contrast");
+  ADD_CHANGED(m_Gamma, "gamma");
+  ADD_CHANGED(m_NoiseReduction, "noisereduction");
+  ADD_CHANGED(m_Sharpness, "sharpness");
+  ADD_CHANGED(m_PostProcess, "postprocess");
+  if (previous.m_ToneMapMethod != current.m_ToneMapMethod)
+  {
+    property["tonemapmethod"] = static_cast<int>(current.m_ToneMapMethod);
+    changed = true;
+  }
+  ADD_CHANGED(m_ToneMapParam, "tonemapparam");
+  ADD_CHANGED(m_StereoMode, "stereomode");
+  ADD_CHANGED(m_StereoInvert, "stereoinvert");
+  ADD_CHANGED(m_Orientation, "orientation");
+  ADD_CHANGED(m_CenterMixLevel, "centermixlevel");
+
+#undef ADD_CHANGED
+
+  if (!changed)
+    return;
+
+  CVariant data(CVariant::VariantTypeObject);
+  data["player"]["playerid"] = static_cast<int>(appPlayer.GetPreferredPlaylist());
+  data["property"] = property;
+  CServiceBroker::GetAnnouncementManager()->Announce(ANNOUNCEMENT::Player, "OnPropertyChanged",
+                                                     data);
+}
+} // namespace
 
 std::shared_ptr<const IPlayer> CApplicationPlayer::GetInternal() const
 {
@@ -731,7 +833,9 @@ void CApplicationPlayer::SetSubtitleVerticalPosition(int value, bool save)
   std::shared_ptr<IPlayer> player = GetInternal();
   if (player)
   {
+    const CVideoSettings previous = player->GetVideoSettings();
     player->SetSubtitleVerticalPosition(value, save);
+    AnnounceVideoSettingsChanged(*this, previous, player->GetVideoSettings());
   }
 }
 
@@ -771,21 +875,33 @@ void CApplicationPlayer::SetSubTitleDelay(float fValue)
 {
   std::shared_ptr<IPlayer> player = GetInternal();
   if (player)
+  {
+    const CVideoSettings previous = player->GetVideoSettings();
     player->SetSubTitleDelay(fValue);
+    AnnounceVideoSettingsChanged(*this, previous, player->GetVideoSettings());
+  }
 }
 
 void CApplicationPlayer::SetAVDelay(float fValue)
 {
   std::shared_ptr<IPlayer> player = GetInternal();
   if (player)
+  {
+    const CVideoSettings previous = player->GetVideoSettings();
     player->SetAVDelay(fValue);
+    AnnounceVideoSettingsChanged(*this, previous, player->GetVideoSettings());
+  }
 }
 
 void CApplicationPlayer::SetDynamicRangeCompression(long drc)
 {
   std::shared_ptr<IPlayer> player = GetInternal();
   if (player)
+  {
+    const CVideoSettings previous = player->GetVideoSettings();
     player->SetDynamicRangeCompression(drc);
+    AnnounceVideoSettingsChanged(*this, previous, player->GetVideoSettings());
+  }
 }
 
 void CApplicationPlayer::LoadPage(int p, int sp, unsigned char* buffer)
@@ -890,7 +1006,11 @@ void CApplicationPlayer::SetRenderViewMode(int mode, float zoom, float par, floa
 {
   std::shared_ptr<IPlayer> player = GetInternal();
   if (player)
+  {
+    const CVideoSettings previous = player->GetVideoSettings();
     player->SetRenderViewMode(mode, zoom, par, shift, stretch);
+    AnnounceVideoSettingsChanged(*this, previous, player->GetVideoSettings());
+  }
 }
 
 float CApplicationPlayer::GetRenderAspectRatio() const
@@ -1049,7 +1169,9 @@ void CApplicationPlayer::SetVideoSettings(CVideoSettings& settings)
   std::shared_ptr<IPlayer> player = GetInternal();
   if (player)
   {
-    return player->SetVideoSettings(settings);
+    const CVideoSettings previous = player->GetVideoSettings();
+    player->SetVideoSettings(settings);
+    AnnounceVideoSettingsChanged(*this, previous, player->GetVideoSettings());
   }
 }
 

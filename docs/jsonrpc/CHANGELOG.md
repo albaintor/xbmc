@@ -6,6 +6,16 @@ The version reported by `JSONRPC.Version` and carried in `openrpc.json` and
 This changelog starts at version 14. Earlier versions were not tracked here;
 for those, the commit history of `xbmc/interfaces/json-rpc/` is the record.
 
+## 14.1.0
+
+### Added
+
+- `Player.GetProperties` can read playback video settings such as audio and subtitle delay,
+  volume amplification, view geometry, renderer adjustments, stereo mode and tone mapping.
+- `Player.SetVideoSettings` changes one or more of those settings in one call. A normal write
+  follows the same per-item persistence path as the playback OSD.
+- Changes made through either the OSD or JSON-RPC are reported by `Player.OnPropertyChanged`.
+
 ## 14.0.0
 
 **A breaking release.** A client written against version 13 is not guaranteed

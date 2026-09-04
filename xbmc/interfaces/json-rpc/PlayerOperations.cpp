@@ -16,6 +16,7 @@
 #include "PartyModeManager.h"
 #include "PlayListPlayer.h"
 #include "PlaybackModes.h"
+#include "PlayerVideoSettings.h"
 #include "SeekHandler.h"
 #include "ServiceBroker.h"
 #include "Util.h"
@@ -2254,6 +2255,12 @@ JSONRPC_STATUS CPlayerOperations::GetPropertyValue(PlayerType player, const std:
   }
   else if (property == "live")
     result = IsPVRChannel();
+  else if (CPlayerVideoSettings::IsProperty(property))
+  {
+    if (player != Video)
+      return FailedToExecute;
+    return CPlayerVideoSettings::GetProperty(property, result);
+  }
   else
     return InvalidParams;
 

@@ -19,6 +19,7 @@
 #include "JSONRPC.h"
 #include "PVROperations.h"
 #include "PlayerOperations.h"
+#include "PlayerVideoSettings.h"
 #include "PlaylistOperations.h"
 #include "ProfilesOperations.h"
 #include "ServiceDescription.h"
@@ -90,6 +91,7 @@ JsonRpcMethodMap CJSONServiceDescription::m_methodMaps[] = {
   { "Player.Stop",                                  CPlayerOperations::Stop },
   { "Player.GetAudioDelay",                         CPlayerOperations::GetAudioDelay },
   { "Player.SetAudioDelay",                         CPlayerOperations::SetAudioDelay },
+  { "Player.SetVideoSettings",                     CPlayerVideoSettings::SetVideoSettings },
   { "Player.SetSpeed",                              CPlayerOperations::SetSpeed },
   { "Player.SetTempo",                              CPlayerOperations::SetTempo },
   { "Player.Seek",                                  CPlayerOperations::Seek },

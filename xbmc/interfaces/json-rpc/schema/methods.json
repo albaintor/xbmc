@@ -696,6 +696,31 @@
       ]
     }
   },
+  "Player.SetVideoSettings": {
+    "type": "method",
+    "description": "Change one or more playback video settings. Changes follow the same per-item persistence path as changes made in the playback OSD.",
+    "transport": "Response",
+    "permission": "ControlPlayback",
+    "params": [
+      {
+        "name": "playerid",
+        "required": true,
+        "schema": {
+          "$ref": "#/$defs/Player.Id"
+        }
+      },
+      {
+        "name": "settings",
+        "required": true,
+        "schema": {
+          "$ref": "#/$defs/Player.VideoSettings"
+        }
+      }
+    ],
+    "returns": {
+      "$ref": "#/$defs/Player.VideoSettings"
+    }
+  },
   "Player.SetSpeed": {
     "type": "method",
     "description": "Set the speed of the current playback",
@@ -8869,7 +8894,6 @@
       },
       {
         "name": "confirmed",
-        "required": false,
         "schema": {
           "type": "boolean",
           "default": false,
