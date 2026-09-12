@@ -13,6 +13,7 @@ set(SOURCES TestAlarmClock.cpp
             TestDigest.cpp
             TestEndianSwap.cpp
             TestExecString.cpp
+            TestFileExtensionProvider.cpp
             TestFileOperationJob.cpp
             TestFileUtils.cpp
             TestGlobalsHandling.cpp
@@ -23,6 +24,7 @@ set(SOURCES TestAlarmClock.cpp
             TestHttpRangeUtils.cpp
             TestHttpResponse.cpp
             TestJobManager.cpp
+            TestJobQueue.cpp
             TestJSONVariantParser.cpp
             TestJSONVariantWriter.cpp
             TestLabelFormatter.cpp

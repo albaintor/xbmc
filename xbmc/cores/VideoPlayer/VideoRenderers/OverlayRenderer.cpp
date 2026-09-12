@@ -151,16 +151,52 @@ void CRenderer::Render(int idx, float depth)
 {
   std::unique_lock lock(m_section);
 
+  // during HDR composite the m_isHDROverlay overlays render via
+  // RenderHDROverlays instead
+  const bool hdrComposite = CServiceBroker::GetWinSystem()->IsHdrComposite();
+  const RenderStereoView stereoView =
+      CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoView();
+
   std::vector<SElement>& list = m_buffers[idx];
   for(std::vector<SElement>::iterator it = list.begin(); it != list.end(); ++it)
   {
     if (it->overlay_dvd)
     {
-      const RenderStereoView stereoView =
-          CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoView();
-
       std::shared_ptr<COverlay> o = Convert(*it);
       if (!o)
+        continue;
+
+      if (!KODI::VIDEO::SUBTITLES::ShouldRenderStereoOverlay(it->overlay_dvd->m_stereoView,
+                                                             stereoView, m_stereomode))
+        continue;
+
+      if (!(hdrComposite && o->m_isHDROverlay))
+        Render(o.get());
+    }
+  }
+
+  ReleaseUnused();
+}
+
+// drawn onto the back buffer right after the video, bypassing the GUI
+// FBO's sRGB->HDR conversion
+void CRenderer::RenderHDROverlays(int idx)
+{
+  if (!CServiceBroker::GetWinSystem()->IsHdrComposite())
+    return;
+
+  std::unique_lock lock(m_section);
+
+  const RenderStereoView stereoView =
+      CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoView();
+
+  std::vector<SElement>& list = m_buffers[idx];
+  for (std::vector<SElement>::iterator it = list.begin(); it != list.end(); ++it)
+  {
+    if (it->overlay_dvd)
+    {
+      std::shared_ptr<COverlay> o = Convert(*it);
+      if (!o || !o->m_isHDROverlay)
         continue;
 
       if (!KODI::VIDEO::SUBTITLES::ShouldRenderStereoOverlay(it->overlay_dvd->m_stereoView,

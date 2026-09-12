@@ -236,62 +236,32 @@ class PredicateAudioFilter
 {
 private:
   int currentAudioStream;
-  bool preferStereo;
+  StreamUtils::AudioPreferences preferences;
+
 public:
   explicit PredicateAudioFilter(int audioStream, bool preferStereo)
-    : currentAudioStream(audioStream)
-    , preferStereo(preferStereo)
+    : currentAudioStream(audioStream),
+      preferences(StreamUtils::AudioPreferences::Current())
   {
+    // Follows from the audio output layout rather than a setting
+    preferences.preferStereo = preferStereo;
   };
   bool operator()(const SelectionStream& lh, const SelectionStream& rh)
   {
+    // A stream remembered from a previous watch outranks everything
     PREDICATE_RETURN(lh.type_index == currentAudioStream
                      , rh.type_index == currentAudioStream);
 
-    const std::shared_ptr<CSettings> settings = CServiceBroker::GetSettingsComponent()->GetSettings();
-
-    if (!StringUtils::EqualsNoCase(settings->GetString(CSettings::SETTING_LOCALE_AUDIOLANGUAGE),
-                                   LANGINFO::audioLanguageMediaDefault))
-    {
-      if (!StringUtils::EqualsNoCase(settings->GetString(CSettings::SETTING_LOCALE_AUDIOLANGUAGE),
-                                     LANGINFO::audioLanguageOriginal))
-      {
-        const CLanguageTag& audioLanguage{g_langInfo.GetAudioLanguage(true)};
-        PREDICATE_RETURN(lh.language.Matches(audioLanguage), rh.language.Matches(audioLanguage));
-      }
-      else
-      {
-        PREDICATE_RETURN(lh.flags & StreamFlags::FLAG_ORIGINAL,
-          rh.flags & StreamFlags::FLAG_ORIGINAL);
-      }
-
-      bool hearingimp = settings->GetBool(CSettings::SETTING_ACCESSIBILITY_AUDIOHEARING);
-      PREDICATE_RETURN(!hearingimp ? !(lh.flags & StreamFlags::FLAG_HEARING_IMPAIRED) : lh.flags & StreamFlags::FLAG_HEARING_IMPAIRED
-                       , !hearingimp ? !(rh.flags & StreamFlags::FLAG_HEARING_IMPAIRED) : rh.flags & StreamFlags::FLAG_HEARING_IMPAIRED);
-
-      bool visualimp = settings->GetBool(CSettings::SETTING_ACCESSIBILITY_AUDIOVISUAL);
-      PREDICATE_RETURN(!visualimp ? !(lh.flags & StreamFlags::FLAG_VISUAL_IMPAIRED) : lh.flags & StreamFlags::FLAG_VISUAL_IMPAIRED
-                       , !visualimp ? !(rh.flags & StreamFlags::FLAG_VISUAL_IMPAIRED) : rh.flags & StreamFlags::FLAG_VISUAL_IMPAIRED);
-    }
-
-    if (settings->GetBool(CSettings::SETTING_VIDEOPLAYER_PREFERDEFAULTFLAG))
-    {
-      PREDICATE_RETURN(lh.flags & StreamFlags::FLAG_DEFAULT,
-                       rh.flags & StreamFlags::FLAG_DEFAULT);
-    }
-
-    if (preferStereo)
-      PREDICATE_RETURN(lh.channels == 2, rh.channels == 2);
-
-    // Order the remaining candidates the same way the library does
-    const int quality{
-        StreamUtils::CompareAudioQuality(lh.codec, lh.channels, rh.codec, rh.channels)};
-    if (quality != 0)
-      return quality > 0;
-
-    PREDICATE_RETURN(lh.flags & StreamFlags::FLAG_DEFAULT,
-                     rh.flags & StreamFlags::FLAG_DEFAULT);
-    return false;
+    // Everything below this is shared with the library
+    return StreamUtils::CompareAudioPreference({.language = lh.language,
+                                                .codec = lh.codec,
+                                                .channels = lh.channels,
+                                                .flags = lh.flags},
+                                               {.language = rh.language,
+                                                .codec = rh.codec,
+                                                .channels = rh.channels,
+                                                .flags = rh.flags},
+                                               preferences) > 0;
   };
 };
 
@@ -2128,11 +2098,25 @@ void CVideoPlayer::HandlePlaySpeed()
         SetCaching(CACHESTATE_INIT);
     }
 
-    // if audio stream stalled, wait until demux queue filled 10%
-    if (m_pInputStream->IsRealtime() &&
-        (m_CurrentAudio.id < 0 || m_VideoPlayerAudio->GetLevel() > 10))
+    // if audio stream stalled, wait until demux queues have filled to 10% before
+    // resuming playback. Both audio AND video need to be checked here - checking
+    // audio alone means buffering can end while video hasn't recovered at all
+    if (m_pInputStream->IsRealtime())
     {
-      SetCaching(CACHESTATE_INIT);
+      const bool audioReady = m_CurrentAudio.id < 0 || m_VideoPlayerAudio->GetLevel() > 10;
+      const bool videoReady = m_CurrentVideo.id < 0 || m_processInfo->GetLevelVQ() > 10;
+
+      if (audioReady && (videoReady || m_cachingTimer.IsTimePast()))
+      {
+        if (!videoReady)
+        {
+          CLog::Log(LOGDEBUG,
+                    "Stream stalled, caching timeout reached before video recovered. "
+                    "Audio: {} - Video: {}",
+                    m_VideoPlayerAudio->GetLevel(), m_processInfo->GetLevelVQ());
+        }
+        SetCaching(CACHESTATE_INIT);
+      }
     }
   }
 
@@ -4230,6 +4214,14 @@ bool CVideoPlayer::OpenStream(CCurrentStream& current, int64_t demuxerId, int iS
       }
       break;
     case StreamType::SUBTITLE:
+      // A PGS palette carries no colorimetry of its own; it is authored to
+      // match the video stream it accompanies, per BD-ROM Part 3.
+      if (hint.codec == AV_CODEC_ID_HDMV_PGS_SUBTITLE)
+      {
+        hint.colorSpace = m_CurrentVideo.hint.colorSpace;
+        hint.colorPrimaries = m_CurrentVideo.hint.colorPrimaries;
+        hint.colorTransferCharacteristic = m_CurrentVideo.hint.colorTransferCharacteristic;
+      }
       res = OpenSubtitleStream(hint);
       break;
     case StreamType::TELETEXT:
