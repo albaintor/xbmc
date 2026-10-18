@@ -161,7 +161,8 @@ TEST(TestVideoFileItemClassify, RecognizeNestedOpticalMediaLikeMovieScanner)
 {
   // A show with several optical disc subfolders must detect actual disc media
   // at the show level, not recurse through BDMV/PLAYLIST as if it were TV shows.
-  const std::string tempFile{CXBMCTestUtils::Instance().CreateTempFile("tvdisc")};
+  XFILE::CFile* tempFile{CXBMCTestUtils::Instance().CreateTempFile("tvdisc")};
+  ASSERT_NE(tempFile, nullptr);
   const std::string root{CXBMCTestUtils::Instance().TempFileDirectory(tempFile)};
   const std::string discFolder{URIUtils::AddFileToFolder(root, "GAVAN D1")};
   const std::string dvdFolder{URIUtils::AddFileToFolder(discFolder, "VIDEO_TS")};

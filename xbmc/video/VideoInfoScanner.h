@@ -144,6 +144,10 @@ namespace KODI::VIDEO
     // only reuse a show whose library path matches the candidate exactly.
     int GetExactTvShowId(const std::string& path);
 
+    static std::string GetRecursiveTvShowTitle(const std::string& name,
+                                             std::string* year = nullptr);
+    static bool IsOpticalSeasonFolder(const std::string& name, const std::string& parentName);
+
 
     InfoRet RetrieveInfoForTvShow(CFileItem* pItem,
                                   bool bDirNames,
