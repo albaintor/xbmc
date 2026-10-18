@@ -417,6 +417,38 @@ CVideoInfoScanner::~CVideoInfoScanner()
     m_bStop = true;
   }
 
+  std::string CVideoInfoScanner::GetRecursiveTvShowTitle(const std::string& name,
+                                                       std::string* year)
+  {
+    std::string title{name};
+    StringUtils::Replace(title, '.', ' ');
+    StringUtils::Replace(title, '_', ' ');
+    std::string titleAndYear, parsedYear;
+    CUtil::CleanString(title, title, titleAndYear, parsedYear, true);
+    CRegExp suffix{true, CRegExp::autoUtf8,
+                  R"((?:^|[ ._-])(?:s[0-9]{1,3}(?:[ ._-]*e[0-9]+)?|integrale|complete|remaster(?:ed)?)(?:[ ._-]|$))"};
+    if (const int offset = suffix.RegFind(title.c_str()); offset > 0)
+      title.resize(static_cast<size_t>(offset));
+    StringUtils::Trim(title, " ._-");
+    StringUtils::RemoveDuplicatedSpacesAndTabs(title);
+    if (year)
+      *year = parsedYear;
+    return title;
+  }
+
+  bool CVideoInfoScanner::IsOpticalSeasonFolder(const std::string& name,
+                                              const std::string& parentName)
+  {
+    CRegExp token{true, CRegExp::autoUtf8,
+                 R"((?:^|[ ._-])s0*[0-9]{1,3}(?:[ ._-]|$))"};
+    const int offset{token.RegFind(name.c_str())};
+    if (offset < 0)
+      return false;
+    const std::string prefix{GetRecursiveTvShowTitle(name.substr(0, offset))};
+    return prefix.empty() ||
+           StringUtils::EqualsNoCase(prefix, GetRecursiveTvShowTitle(parentName));
+  }
+
   int CVideoInfoScanner::GetExactTvShowId(const std::string& path)
   {
     // GetTvShowId() deliberately looks at ancestors; this is appropriate for
@@ -688,7 +720,9 @@ CVideoInfoScanner::~CVideoInfoScanner()
           // DVD 1". Only generic volume names or volume names whose captured
           // prefix matches the candidate show may promote it to a show root.
           StringUtils::Trim(volumePrefix, " ._-");
-          if (volumePrefix.empty() || StringUtils::EqualsNoCase(volumePrefix, currentName))
+          if (volumePrefix.empty() ||
+              StringUtils::EqualsNoCase(GetRecursiveTvShowTitle(volumePrefix),
+                                       GetRecursiveTvShowTitle(currentName)))
           {
             hasDiscVolumes = true;
             break;
@@ -746,23 +780,7 @@ CVideoInfoScanner::~CVideoInfoScanner()
                 continue;
 
               std::string title{filename.substr(0, static_cast<size_t>(offset))};
-              for (char& c : title)
-              {
-                // Release naming styles such as "Dragon Ball Super (2015)"
-                // and "Dragon.Ball.Super.2015" represent the same prefix.
-                if (c == '.' || c == '_' || c == '-' || c == '(' || c == ')')
-                  c = ' ';
-              }
-              StringUtils::Trim(title, " ");
-              StringUtils::ToLower(title);
-              // Collapse repeated separators before comparing filenames.
-              std::string normalizedTitle;
-              for (char c : title)
-              {
-                if (c == ' ' && (normalizedTitle.empty() || normalizedTitle.back() == ' '))
-                  continue;
-                normalizedTitle += c;
-              }
+              std::string normalizedTitle{StringUtils::ToLower(GetRecursiveTvShowTitle(title))};
               if (!normalizedTitle.empty())
                 ++episodeTitleCounts[normalizedTitle];
               break;
@@ -771,22 +789,8 @@ CVideoInfoScanner::~CVideoInfoScanner()
 
           // Ignore a single weak numeric-only match in an unnumbered movie
           // directory, unless a user explicitly identifies the series by NFO.
-          std::string folderTitle{URIUtils::GetFileOrFolderName(strDirectory)};
-          for (char& c : folderTitle)
-          {
-            if (c == '.' || c == '_' || c == '-' || c == '(' || c == ')')
-              c = ' ';
-          }
-          StringUtils::Trim(folderTitle, " ");
-          StringUtils::ToLower(folderTitle);
-          std::string normalizedFolderTitle;
-          for (char c : folderTitle)
-          {
-            if (c == ' ' &&
-                (normalizedFolderTitle.empty() || normalizedFolderTitle.back() == ' '))
-              continue;
-            normalizedFolderTitle += c;
-          }
+          const std::string normalizedFolderTitle{StringUtils::ToLower(
+              GetRecursiveTvShowTitle(URIUtils::GetFileOrFolderName(strDirectory)))};
 
           // A single file with a weak numeric match (e.g. a movie named
           // "Dragon Ball GT 100 ans") must not turn an unrelated directory
@@ -946,9 +950,7 @@ CVideoInfoScanner::~CVideoInfoScanner()
               {
                 const std::string folderName{
                     StringUtils::ToLower(URIUtils::GetFileOrFolderName(child->GetPath()))};
-                CRegExp seasonToken;
-                if (seasonToken.RegComp(R"((?:^|[ ._-])s0*[0-9]{1,3}(?:[ ._-]|$))") &&
-                    seasonToken.RegFind(folderName.c_str()) >= 0)
+                if (IsOpticalSeasonFolder(folderName, currentName))
                 {
                   hasSeasonSubfolders = true;
                   hasOpticalSeasonFolders = true;
@@ -1732,8 +1734,19 @@ CVideoInfoScanner::~CVideoInfoScanner()
 
     if (pURL && pURL->HasUrls())
       url = *pURL;
-    else if ((retVal = FindVideo(movieTitle, movieYear, info2, url, pDlgProgress)) <= 0)
-      return retVal < 0 ? InfoRet::CANCELLED : InfoRet::NOT_FOUND;
+    else
+    {
+      if (pItem->GetProperty("recursive_tvshow_discovery").asBoolean() &&
+          result != InfoType::TITLE)
+      {
+        std::string year;
+        movieTitle = GetRecursiveTvShowTitle(movieTitle, &year);
+        if (!year.empty())
+          movieYear = std::stoi(year);
+      }
+      if ((retVal = FindVideo(movieTitle, movieYear, info2, url, pDlgProgress)) <= 0)
+        return retVal < 0 ? InfoRet::CANCELLED : InfoRet::NOT_FOUND;
+    }
 
     CLog::Log(LOGDEBUG, "VideoInfoScanner: Fetching url '{}' using {} scraper (content: '{}')",
               url.GetFirstThumbUrl(), info2->Name(), info2->Content());
@@ -2618,6 +2631,11 @@ CVideoInfoScanner::~CVideoInfoScanner()
              });
 
     bool hasEpisodeCandidates = false;
+    const bool recursiveDiscovery = item->GetProperty("recursive_tvshow_discovery").asBoolean();
+    CRegExp seasonCompilation{true, CRegExp::autoUtf8};
+    if (recursiveDiscovery)
+      seasonCompilation.RegComp(
+          R"((?:^|[ ._-])s[0-9]+[ ._-]+p(?:ar)?t[ ._-]*[0-9]+(?:[ ._-]|$))");
 
     // enumerate
     for (int i=0;i<items.Size();++i)
@@ -2643,6 +2661,15 @@ CVideoInfoScanner::~CVideoInfoScanner()
        */
       if (ProcessItemByVideoInfoTag(items[i].get(), episodeList))
         continue;
+
+      if (recursiveDiscovery &&
+          seasonCompilation.RegFind(URIUtils::GetFileName(items[i]->GetPath()).c_str()) >= 0 &&
+          !CFile::Exists(URIUtils::ReplaceExtension(items[i]->GetPath(), ".nfo")))
+      {
+        CLog::Log(LOGWARNING, "VideoInfoScanner: Season compilation '{}' needs episode metadata",
+                  CURL::GetRedacted(items[i]->GetPath()));
+        continue;
+      }
 
       if (!CEpisodeUtils::EnumerateEpisodeItem(items[i].get(), episodeList, &m_regexpCache))
         CLog::Log(LOGDEBUG, "VideoInfoScanner: Could not enumerate file {}",
