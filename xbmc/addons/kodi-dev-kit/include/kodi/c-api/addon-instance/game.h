@@ -50,6 +50,9 @@ extern "C"
 
     /// @brief Game requires restricted resources
     GAME_ERROR_RESTRICTED,
+
+    /// @brief The game client couldn't find files it needs, such as BIOS files
+    GAME_ERROR_MISSING_FILES,
   } GAME_ERROR;
   //----------------------------------------------------------------------------
 
@@ -391,12 +394,32 @@ extern "C"
   //==============================================================================
   /// @brief **Hardware framebuffer properties**
   ///
-  /// This struct is empty because hardware rendering properties are passed via
-  /// EnableHardwareRendering().
+  /// The remaining hardware rendering properties are passed earlier, via
+  /// EnableHardwareRendering(). Display geometry is carried here, because it
+  /// comes from the client's system AV info, which is not available that early.
   ///
   typedef struct game_stream_hw_framebuffer_properties
   {
-    char dummy; // Occupier for empty struct
+    /// @brief The largest frame width the client will render, in pixels
+    ///
+    /// The frontend allocates its framebuffer at this size, so the client can
+    /// render any frame into it without it being reallocated mid-game.
+    ///
+    /// The framebuffer must exist before the stream is opened, because clients
+    /// typically ask for it from inside HwContextReset(), which the frontend
+    /// invokes as soon as the stream is open.
+    ///
+    unsigned int max_width;
+
+    /// @brief The largest frame height the client will render, in pixels
+    unsigned int max_height;
+
+    /// @brief The nominal display aspect ratio (DAR) used to show the video frame
+    ///
+    /// An aspect ratio of 0.0 indicates square pixels, i.e. a DAR of W/H.
+    ///
+    float nominal_display_aspect_ratio;
+
   } ATTR_PACKED game_stream_hw_framebuffer_properties;
   //----------------------------------------------------------------------------
 
@@ -417,6 +440,23 @@ extern "C"
   {
     /// @brief
     uintptr_t framebuffer;
+
+    /// @brief Size of the image the client just drew
+    ///
+    /// The framebuffer is allocated at the largest size the client said it
+    /// would ever need, and a frame usually fills only part of it. Without
+    /// these the rest of the framebuffer is shown along with the image.
+    unsigned int width;
+    unsigned int height;
+
+    /// @brief Display aspect ratio (DAR) to use when showing the video frame
+    ///
+    /// An aspect ratio of 0.0 indicates square pixels, i.e. a DAR of W/H.
+    ///
+    float display_aspect_ratio;
+
+    /// @brief Video rotation angle defined by @ref GAME_VIDEO_ROTATION
+    GAME_VIDEO_ROTATION rotation;
   } ATTR_PACKED game_stream_hw_framebuffer_packet;
   //----------------------------------------------------------------------------
 
@@ -1511,6 +1551,14 @@ extern "C"
      * @brief Number of extensions provided
      */
     unsigned int extension_count;
+
+    /*!
+     * @brief The <libretro_core> property from addon.xml, such as
+     * "fceumm_libretro", or empty if there is none
+     *
+     * Added in 8.2.1, so an older Kodi's properties end before it.
+     */
+    const char* libretro_core;
   } AddonProps_Game;
 
   typedef void* KODI_GAME_STREAM_HANDLE;
@@ -1581,6 +1629,32 @@ extern "C"
                                       const struct game_rc_leaderboard_scoreboard* data);
     void (*RCOnReset)(KODI_HANDLE kodiInstance);
     void (*RCOnSubsetCompleted)(KODI_HANDLE kodiInstance, const char* title);
+
+    /*!
+     * @brief Reset a prepared hardware stream after installing its returned handle.
+     *
+     * OpenStream creates the context and framebuffer without calling the add-on.
+     * Call StartStream after storing that handle, so HwContextReset can acquire
+     * a framebuffer. Repeated calls do not reset again. On failure, CloseStream
+     * must release the handle; Kodi calls HwContextDestroy before teardown.
+     */
+    bool (*StartStream)(KODI_HANDLE, KODI_GAME_STREAM_HANDLE);
+
+    /*!
+     * @brief Name a file the game client looked for and couldn't find.
+     *
+     * Call it before returning GAME_ERROR_MISSING_FILES. The path is relative
+     * to the client's system directory. Since game API 8.3.0.
+     */
+    void (*ReportMissingFile)(KODI_HANDLE kodiInstance, const char* path);
+
+    /*!
+     * @brief Ask Kodi to fast-forward, or to stop a fast-forward it asked for.
+     *
+     * A ratio above 1 is the speed asked for; anything else leaves it to Kodi.
+     * Since game API 8.4.0.
+     */
+    void (*SetFastForwarding)(KODI_HANDLE kodiInstance, bool fastForward, double ratio);
   } AddonToKodiFuncTable_Game;
 
   /*!

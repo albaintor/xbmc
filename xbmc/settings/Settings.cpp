@@ -10,7 +10,6 @@
 
 #include "Autorun.h"
 #include "GUIPassword.h"
-#include "LangInfo.h"
 #include "addons/AddonSystemSettings.h"
 #include "addons/Skin.h"
 #include "application/AppParams.h"
@@ -19,6 +18,7 @@
 #include "guilib/GUIFontManager.h"
 #include "guilib/StereoscopicsManager.h"
 #include "input/keyboard/KeyboardLayoutManager.h"
+#include "language/LangInfo.h"
 #include "network/WakeOnAccess.h"
 #include "network/upnp/UPnPSettings.h"
 
@@ -269,6 +269,9 @@ bool CSettings::InitializeDefinitions()
   if (CFile::Exists(SETTINGS_XML_FOLDER "webos.xml") &&
       !Initialize(SETTINGS_XML_FOLDER "webos.xml"))
     CLog::Log(LOGFATAL, "Unable to load webOS-specific settings definitions");
+#elif defined(TARGET_WASM)
+  if (CFile::Exists(SETTINGS_XML_FOLDER "wasm.xml") && !Initialize(SETTINGS_XML_FOLDER "wasm.xml"))
+    CLog::Log(LOGFATAL, "Unable to load wasm-specific settings definitions");
 #elif defined(TARGET_LINUX)
   if (CFile::Exists(SETTINGS_XML_FOLDER "linux.xml") && !Initialize(SETTINGS_XML_FOLDER "linux.xml"))
     CLog::Log(LOGFATAL, "Unable to load linux-specific settings definitions");
@@ -600,7 +603,8 @@ void CSettings::InitializeISettingCallbacks()
        CSettings::SETTING_VIDEOSCREEN_PREFEREDSTEREOSCOPICMODE,
        CSettings::SETTING_VIDEOSCREEN_3DLUT, CSettings::SETTING_VIDEOSCREEN_DISPLAYPROFILE,
        CSettings::SETTING_VIDEOSCREEN_BLANKDISPLAYS, CSettings::SETTING_VIDEOSCREEN_WHITELIST,
-       CSettings::SETTING_VIDEOSCREEN_10BITSURFACES});
+       CSettings::SETTING_VIDEOSCREEN_10BITSURFACES,
+       CSettings::SETTING_VIDEOSCREEN_HIGHPERFORMANCEGPU});
 
   GetSettingsManager()->RegisterCallback(&g_charsetConverter, {CSettings::SETTING_SUBTITLES_CHARSET,
                                                                CSettings::SETTING_LOCALE_CHARSET});

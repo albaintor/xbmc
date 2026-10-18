@@ -219,6 +219,7 @@ public:
   static constexpr auto SETTING_PVRMANAGER_ADDONS = "pvrmanager.addons";
   static constexpr auto SETTING_PVRMENU_DISPLAYCHANNELINFO = "pvrmenu.displaychannelinfo";
   static constexpr auto SETTING_PVRMENU_CLOSECHANNELOSDONSWITCH = "pvrmenu.closechannelosdonswitch";
+  static constexpr auto SETTING_PVRMENU_PROVIDERCHANNELOSD = "pvrmenu.providerchannelosd";
   static constexpr auto SETTING_PVRMENU_ICONPATH = "pvrmenu.iconpath";
   static constexpr auto SETTING_PVRMENU_SEARCHICONS = "pvrmenu.searchicons";
   static constexpr auto SETTING_EPG_PAST_DAYSTODISPLAY = "epg.pastdaystodisplay";
@@ -261,7 +262,6 @@ public:
   static constexpr auto SETTING_PVRPARENTAL_ENABLED = "pvrparental.enabled";
   static constexpr auto SETTING_PVRPARENTAL_PIN = "pvrparental.pin";
   static constexpr auto SETTING_PVRPARENTAL_DURATION = "pvrparental.duration";
-  static constexpr auto SETTING_PVRCLIENT_MENUHOOK = "pvrclient.menuhook";
   static constexpr auto SETTING_PVRTIMERS_HIDEDISABLEDTIMERS = "pvrtimers.hidedisabledtimers";
   static constexpr auto SETTING_MUSICLIBRARY_SHOWCOMPILATIONARTISTS =
       "musiclibrary.showcompilationartists";
@@ -394,6 +394,7 @@ public:
   static constexpr auto SETTING_VIDEOSCREEN_LIMITEDRANGE = "videoscreen.limitedrange";
   static constexpr auto SETTING_VIDEOSCREEN_FRAMEPACKING = "videoscreen.framepacking";
   static constexpr auto SETTING_VIDEOSCREEN_10BITSURFACES = "videoscreen.10bitsurfaces";
+  static constexpr auto SETTING_VIDEOSCREEN_HIGHPERFORMANCEGPU = "videoscreen.highperformancegpu";
   static constexpr auto SETTING_VIDEOSCREEN_USESYSTEMSDRPEAKLUMINANCE =
       "videoscreen.usesystemsdrpeakluminance";
   static constexpr auto SETTING_VIDEOSCREEN_GUISDRPEAKLUMINANCE = "videoscreen.guipeakluminance";
@@ -414,6 +415,8 @@ public:
   static constexpr auto SETTING_AUDIOOUTPUT_GUISOUNDMODE = "audiooutput.guisoundmode";
   static constexpr auto SETTING_AUDIOOUTPUT_GUISOUNDVOLUME = "audiooutput.guisoundvolume";
   static constexpr auto SETTING_AUDIOOUTPUT_PASSTHROUGH = "audiooutput.passthrough";
+  static constexpr auto SETTING_AUDIOOUTPUT_PASSTHROUGHVOLUMECONTROL =
+      "audiooutput.passthroughvolumecontrol";
   static constexpr auto SETTING_AUDIOOUTPUT_PASSTHROUGHDEVICE = "audiooutput.passthroughdevice";
   static constexpr auto SETTING_AUDIOOUTPUT_AC3PASSTHROUGH = "audiooutput.ac3passthrough";
   static constexpr auto SETTING_AUDIOOUTPUT_AC3TRANSCODE = "audiooutput.ac3transcode";
@@ -438,7 +441,7 @@ public:
       "input.siriremotehorizontalsensitivity";
   static constexpr auto SETTING_INPUT_SIRIREMOTEVERTICALSENSITIVITY =
       "input.siriremoteverticalsensitivity";
-  static constexpr auto SETTING_INPUT_TVOSUSEKODIKEYBOARD = "input.tvosusekodikeyboard";
+  static constexpr auto SETTING_INPUT_USEAPPLICATIONKEYBOARD = "input.useapplicationkeyboard";
   static constexpr auto SETTING_NETWORK_USEHTTPPROXY = "network.usehttpproxy";
   static constexpr auto SETTING_NETWORK_HTTPPROXYTYPE = "network.httpproxytype";
   static constexpr auto SETTING_NETWORK_HTTPPROXYSERVER = "network.httpproxyserver";

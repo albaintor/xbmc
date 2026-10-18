@@ -68,9 +68,11 @@ namespace KODI::VIDEO
                     bool useLocal = true,
                     const std::string& actorArtPath = "",
                     CVideoInfoScannerArt::UseRemoteArtWithLocalScraper useRemoteArt =
-                        CVideoInfoScannerArt::UseRemoteArtWithLocalScraper::YES) const
+                        CVideoInfoScannerArt::UseRemoteArtWithLocalScraper::YES,
+                    const CFileItem* mediaItem = nullptr) const
     {
-      m_art.GetArtwork(pItem, content, bApplyToDir, useLocal, actorArtPath, useRemoteArt);
+      m_art.GetArtwork(pItem, content, bApplyToDir, useLocal, actorArtPath, useRemoteArt,
+                       mediaItem);
     }
 
     /*! \brief Scan a folder using the background scanner
@@ -272,6 +274,8 @@ namespace KODI::VIDEO
      A disc rip or archive is not anchored in the folder that was scanned but under a
      bluray:// or zip:// path of its own. Those are queued too, otherwise the clean never
      looks at them and media removed with the disc stays in the library.
+     The video extras folders of the directory are queued too, as the scan adds their
+     extras without scanning them as directories of their own.
      \param directory the directory that was scanned
      */
     void AddPathToClean(const std::string& directory);
@@ -331,6 +335,7 @@ namespace KODI::VIDEO
     //! Sticky - never reset, so a scanner instance is good for one scan only
     std::atomic<bool> m_bStop{false};
     bool m_scanAll;
+    bool m_scanSubtree{false};
 
     SimilarVideoScanAction m_similarVideoAction{SimilarVideoScanAction::NONE};
     bool m_ignoreVideoExtras{false};

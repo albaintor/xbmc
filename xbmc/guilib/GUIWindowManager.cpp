@@ -147,6 +147,7 @@
 /* Game related include files */
 #include "cores/RetroPlayer/guiwindows/GameWindowFullScreen.h"
 #include "games/agents/windows/GUIAgentWindow.h"
+#include "games/cheats/dialogs/DialogGameCheats.h"
 #include "games/controllers/windows/GUIControllerWindow.h"
 #include "games/dialogs/disc/DialogGameDiscManager.h"
 #include "games/dialogs/osd/DialogGameAchievements.h"
@@ -362,6 +363,7 @@ void CGUIWindowManager::CreateWindows()
   Add(new GAME::CDialogGameLeaderboards);
   Add(new GAME::CDialogGameLeaderboardEntries);
   Add(new GAME::CDialogGameIndicators);
+  Add(new GAME::CDialogGameCheats);
   Add(new RETRO::CGameWindowFullScreen);
 }
 
@@ -493,6 +495,7 @@ bool CGUIWindowManager::DestroyWindows()
     DestroyWindow(WINDOW_DIALOG_GAME_LEADERBOARD_ENTRIES);
     DestroyWindow(WINDOW_DIALOG_GAME_INDICATORS);
     DestroyWindow(WINDOW_DIALOG_GAME_ACHIEVEMENTS);
+    DestroyWindow(WINDOW_DIALOG_GAME_CHEATS);
     DestroyWindow(WINDOW_FULLSCREEN_GAME);
 
     Remove(WINDOW_SETTINGS_SERVICE);
@@ -1032,8 +1035,11 @@ bool CGUIWindowManager::SwitchToFullScreen(bool force /* = false */)
   const auto appPlayer = components.GetComponent<CApplicationPlayer>();
 
   // See if we're playing a game
-  if (activeWindowID != WINDOW_FULLSCREEN_GAME && appPlayer->IsPlayingGame())
-    windowID = WINDOW_FULLSCREEN_GAME;
+  if (appPlayer->IsPlayingGame())
+  {
+    if (activeWindowID != WINDOW_FULLSCREEN_GAME)
+      windowID = WINDOW_FULLSCREEN_GAME;
+  }
 
   // See if we're playing a video
   else if (activeWindowID != WINDOW_FULLSCREEN_VIDEO && appPlayer->IsPlayingVideo())
@@ -1423,10 +1429,15 @@ bool CGUIWindowManager::Render()
       CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_guiVisualizeDirtyRegions;
   if (visualizeDirtyRegions)
     bufferAge = 20;
-  if (bufferAge)
-    m_tracker.CleanMarkedRegions(bufferAge + 1);
-  else
-    m_tracker.CleanMarkedRegions(10);
+  // in the stereo modes Render() runs once per eye, age the regions once per frame
+  // otherwise the right eye drops them a frame early and misses redraws
+  if (CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoView() != RenderStereoView::RIGHT)
+  {
+    if (bufferAge)
+      m_tracker.CleanMarkedRegions(bufferAge + 1);
+    else
+      m_tracker.CleanMarkedRegions(10);
+  }
 
   CDirtyRegionList dirtyRegions = m_tracker.GetDirtyRegions();
 
@@ -1487,14 +1498,27 @@ void CGUIWindowManager::AfterRender()
 
   // make copy of vector as we may remove items from it as we go
   auto activeDialogs = m_activeDialogs;
+  bool dialogDirty = false;
   for (const auto& window : activeDialogs)
   {
     if (window->IsDialogRunning())
     {
       window->AfterRender();
-      // Dialog state can affect visibility states
-      if (pWindow && window->IsControlDirty())
-        pWindow->MarkDirtyRegion();
+      dialogDirty |= window->IsControlDirty();
+    }
+  }
+
+  // Dialog state can affect visibility states of the window and the other dialogs
+  if (dialogDirty)
+  {
+    if (pWindow)
+      pWindow->MarkDirtyRegion();
+
+    CGUIMessage msg(GUI_MSG_NOTIFY_ALL, 0, 0, GUI_MSG_STATE_CHANGED);
+    for (const auto& window : activeDialogs)
+    {
+      if (window->IsDialogRunning())
+        window->OnMessage(msg);
     }
   }
 }

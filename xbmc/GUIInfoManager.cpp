@@ -26,6 +26,7 @@
 #include "messaging/ApplicationMessenger.h"
 #include "playlists/PlayListTypes.h"
 #include "settings/SkinSettings.h"
+#include "utils/ArtTypes.h"
 #include "utils/ArtUtils.h"
 #include "utils/CharsetConverter.h"
 #include "utils/FileUtils.h"
@@ -42,6 +43,7 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <optional>
 
 using namespace KODI;
 using namespace KODI::GUILIB;
@@ -985,6 +987,17 @@ constexpr std::array<InfoMap, 2> player_param = {{
 ///     @skinning_v15 **[New Infolabel]** \link Player_SeekStepSize `Player.SeekStepSize`\endlink
 ///     <p>
 ///   }
+///   \table_row3{   <b>`Player.SeekStepValue([format])`</b>,
+///                  \anchor Player_SeekStepValue_format
+///                  _string_,
+///     @return The current configured seek step value in a given format.
+///     @param format [opt] The format of the return time value.
+///     See \ref TIME_FORMAT for the list of possible values.
+///     <p>
+///     <hr>
+///     @skinning_v22 **[New Infolabel]** \link Player_SeekStepValue_format `Player.SeekStepValue`\endlink
+///     <p>
+///   }
 ///   \table_row3{   <b>`Player.TimeRemaining([format])`</b>,
 ///                  \anchor Player_TimeRemaining_format
 ///                  _string_,
@@ -1040,10 +1053,11 @@ constexpr std::array<InfoMap, 2> player_param = {{
 ///     <p>
 ///   }
 // clang-format off
-constexpr std::array<InfoMap, 10> player_times = {{
+constexpr std::array<InfoMap, 11> player_times = {{
     {"seektime",      PLAYER_SEEKTIME},
     {"seekoffset",    PLAYER_SEEKOFFSET},
     {"seekstepsize",  PLAYER_SEEKSTEPSIZE},
+    {"seekstepvalue", PLAYER_SEEKSTEPVALUE},
     {"timeremaining", PLAYER_TIME_REMAINING},
     {"timespeed",     PLAYER_TIME_SPEED},
     {"time",          PLAYER_TIME},
@@ -4504,6 +4518,38 @@ constexpr std::array<InfoMap, 88> videoplayer = {{
 ///     @skinning_v22 **[New Boolean Condition]** \link RetroPlayer_AchievementsLoggedIn `RetroPlayer.AchievementsLoggedIn`\endlink
 ///     <p>
 ///   }
+///   \table_row3{   <b>`RetroPlayer.HasCheats`</b>,
+///                  \anchor RetroPlayer_HasCheats
+///                  _boolean_,
+///     @return **True** if at least one exact filename match was discovered among
+///     the cheat packs for the currently-playing game\, **False** otherwise.
+///     Multiple matching packs count before selection\, as does a matching pack
+///     containing no usable cheat entries. Use `RetroPlayer.SupportsCheats` to
+///     check the game client's cheat API capability independently of file matches.
+///     <p><hr>
+///     @skinning_v22 **[New Boolean Condition]** \link RetroPlayer_HasCheats `RetroPlayer.HasCheats`\endlink
+///     <p>
+///   }
+///   \table_row3{   <b>`RetroPlayer.SupportsCheats`</b>,
+///                  \anchor RetroPlayer_SupportsCheats
+///                  _boolean_,
+///     @return **True** if the currently-playing game client implements the
+///     cheat API\, **False** otherwise. This is independent of whether a matching
+///     cheat file exists and controls the Cheats OSD item's visibility.
+///     Use `RetroPlayer.HasCheats` to check for discovered matching cheat files.
+///     <p><hr>
+///     @skinning_v22 **[New Boolean Condition]** \link RetroPlayer_SupportsCheats `RetroPlayer.SupportsCheats`\endlink
+///     <p>
+///   }
+///   \table_row3{   <b>`RetroPlayer.AchievementsHardcore`</b>,
+///                  \anchor RetroPlayer_AchievementsHardcore
+///                  _boolean_,
+///     @return **True** if achievements are being earned in hardcore mode\,
+///     **False** otherwise.
+///     <p><hr>
+///     @skinning_v23 **[New Boolean Condition]** \link RetroPlayer_AchievementsHardcore `RetroPlayer.AchievementsHardcore`\endlink
+///     <p>
+///   }
 ///   \table_row3{   <b>`RetroPlayer.AchievementsProgress`</b>,
 ///                  \anchor RetroPlayer_AchievementsProgress
 ///                  _string_,
@@ -4602,7 +4648,7 @@ constexpr std::array<InfoMap, 88> videoplayer = {{
 ///
 /// -----------------------------------------------------------------------------
 // clang-format off
-constexpr std::array<InfoMap, 26> retroplayer = {{
+constexpr std::array<InfoMap, 29> retroplayer = {{
     {"title", RETROPLAYER_TITLE},
     {"platform", RETROPLAYER_PLATFORM},
     {"genres", RETROPLAYER_GENRES},
@@ -4614,6 +4660,8 @@ constexpr std::array<InfoMap, 26> retroplayer = {{
     {"gameclientplatforms", RETROPLAYER_GAME_CLIENT_PLATFORMS},
     {"richpresence", RETROPLAYER_RICH_PRESENCE},
     {"achievementsloggedin", RETROPLAYER_ACHIEVEMENTS_LOGGED_IN},
+    {"hascheats", RETROPLAYER_HAS_CHEATS},
+    {"supportscheats", RETROPLAYER_SUPPORTS_CHEATS},
     {"achievementsprogress", RETROPLAYER_ACHIEVEMENTS_PROGRESS},
     {"achievementschallengetitle", RETROPLAYER_ACHIEVEMENTS_CHALLENGE_TITLE},
     {"achievementschallengebadge", RETROPLAYER_ACHIEVEMENTS_CHALLENGE_BADGE},
@@ -4622,6 +4670,7 @@ constexpr std::array<InfoMap, 26> retroplayer = {{
     {"achievementsindicatorbadge", RETROPLAYER_ACHIEVEMENTS_INDICATOR_BADGE},
     {"achievementsindicatorprogress", RETROPLAYER_ACHIEVEMENTS_INDICATOR_PROGRESS},
     {"achievementsindicatorpercent", RETROPLAYER_ACHIEVEMENTS_INDICATOR_PERCENT},
+    {"achievementshardcore", RETROPLAYER_ACHIEVEMENTS_HARDCORE},
     {"supportseject", RETROPLAYER_SUPPORTS_EJECT},
     {"discejected", RETROPLAYER_DISC_EJECTED},
     {"disclabel", RETROPLAYER_DISC_LABEL},
@@ -5386,7 +5435,10 @@ constexpr std::array<InfoMap, 3> container_str = {{
 ///   \table_row3{   <b>`ListItem.OriginalTitle`</b>,
 ///                  \anchor ListItem_OriginalTitle
 ///                  _string_,
-///     @return The original title of the currently selected movie in a container.
+///     @return The original title of the currently selected movie or game in a container.
+///     <p><hr>
+///     @skinning_v23 **[Infolabel Updated]** \link ListItem_OriginalTitle `ListItem.OriginalTitle`\endlink extended
+///     to support games
 ///     <p>
 ///   }
 ///   \table_row3{   <b>`ListItem.SortLetter`</b>,
@@ -5602,8 +5654,11 @@ constexpr std::array<InfoMap, 3> container_str = {{
 ///   \table_row3{   <b>`ListItem.Genre`</b>,
 ///                  \anchor ListItem_Genre
 ///                  _string_,
-///     @return The genre of the currently selected song\, album or movie in a
+///     @return The genre of the currently selected song\, album\, movie or game in a
 ///     container.
+///     <p><hr>
+///     @skinning_v23 **[Infolabel Updated]** \link ListItem_Genre `ListItem.Genre`\endlink extended
+///     to support games
 ///     <p>
 ///   }
 ///   \table_row3{   <b>`ListItem.Genre(separator)`</b>,
@@ -6342,6 +6397,9 @@ constexpr std::array<InfoMap, 3> container_str = {{
 ///     @skinning_v17 **[Infolabel Updated]** \link ListItem_Rating `ListItem.Ratings`\endlink
 ///     for songs it's now the scraped rating.
 ///     <p>
+///     @skinning_v23 **[Infolabel Updated]** \link ListItem_Rating `ListItem.Rating`\endlink extended
+///     to support games
+///     <p>
 ///   }
 ///   \table_row3{   <b>`ListItem.Set`</b>,
 ///                  \anchor ListItem_Set
@@ -6539,7 +6597,10 @@ constexpr std::array<InfoMap, 3> container_str = {{
 ///                  \anchor ListItem_Trailer
 ///                  _string_,
 ///     @return The full trailer path with filename of the currently selected
-///     movie in a container.
+///     movie or game in a container.
+///     <p><hr>
+///     @skinning_v23 **[Infolabel Updated]** \link ListItem_Trailer `ListItem.Trailer`\endlink extended
+///     to support games
 ///     <p>
 ///   }
 ///   \table_row3{   <b>`ListItem.Writer`</b>,
@@ -6568,6 +6629,9 @@ constexpr std::array<InfoMap, 3> container_str = {{
 ///     <p><hr>
 ///     @skinning_v17 **[New Infolabel]** \link ListItem_Tag `ListItem.Tag`\endlink
 ///     <p>
+///     @skinning_v23 **[Infolabel Updated]** \link ListItem_Tag `ListItem.Tag`\endlink extended
+///     to support games
+///     <p>
 ///   }
 ///   \table_row3{   <b>`ListItem.Tagline`</b>,
 ///                  \anchor ListItem_Tagline
@@ -6584,7 +6648,10 @@ constexpr std::array<InfoMap, 3> container_str = {{
 ///   \table_row3{   <b>`ListItem.Plot`</b>,
 ///                  \anchor ListItem_Plot
 ///                  _string_,
-///     @return The complete Text Summary of Video in a container.
+///     @return The complete Text Summary of Video or a game in a container.
+///     <p><hr>
+///     @skinning_v23 **[Infolabel Updated]** \link ListItem_Plot `ListItem.Plot`\endlink extended
+///     to support games
 ///     <p>
 ///   }
 ///   \table_row3{   <b>`ListItem.IMDBNumber`</b>,
@@ -7364,6 +7431,9 @@ constexpr std::array<InfoMap, 3> container_str = {{
 ///     @return The game platform (e.g. "Atari 2600") (RETROPLAYER).
 ///     <p><hr>
 ///     @skinning_v18 **[New Infolabel]** \link ListItem_Platform `ListItem.Platform`\endlink
+///
+///     @skinning_v23 **[Infolabel Updated]** \link ListItem_Platform `ListItem.Platform`\endlink
+///     now available for games in a container.
 ///     <p>
 ///   }
 ///   \table_row3{   <b>`ListItem.Genres`</b>,
@@ -7380,6 +7450,9 @@ constexpr std::array<InfoMap, 3> container_str = {{
 ///     @return The game publisher (e.g. "Nintendo") (RETROPLAYER).
 ///     <p><hr>
 ///     @skinning_v18 **[New Infolabel]** \link ListItem_Publisher `ListItem.Publisher`\endlink
+///
+///     @skinning_v23 **[Infolabel Updated]** \link ListItem_Publisher `ListItem.Publisher`\endlink
+///     now available for games in a container.
 ///     <p>
 ///   }
 ///   \table_row3{   <b>`ListItem.Developer`</b>,
@@ -7388,6 +7461,29 @@ constexpr std::array<InfoMap, 3> container_str = {{
 ///     @return The game developer (e.g. "Square") (RETROPLAYER).
 ///     <p><hr>
 ///     @skinning_v18 **[New Infolabel]** \link ListItem_Developer `ListItem.Developer`\endlink
+///
+///     @skinning_v23 **[Infolabel Updated]** \link ListItem_Developer `ListItem.Developer`\endlink
+///     now available for games in a container.
+///     <p>
+///   }
+///   \table_row3{   <b>`ListItem.Players`</b>,
+///                  \anchor ListItem_Players
+///                  _string_,
+///     @return The most players who can play the game at once (e.g. "4"), or empty if unknown
+///     (RETROPLAYER).
+///     <p><hr>
+///     @skinning_v23 **[New Infolabel]** \link ListItem_Players `ListItem.Players`\endlink
+///     <p>
+///   }
+///   \table_row3{   <b>`ListItem.AgeRating`</b>,
+///                  \anchor ListItem_AgeRating
+///                  _string_,
+///     @return The game's age rating: the rating board followed by its rating, e.g. "PEGI 12"
+///     (Europe, ages 12 and up), "BBFC 15" (UK, ages 15 and up), "ESRB T" (North America, Teen,
+///     ages 13 and up) or "CERO B" (Japan, ages 12 and up). Each region's board has its own scale,
+///     and Kodi doesn't convert between them (RETROPLAYER).
+///     <p><hr>
+///     @skinning_v23 **[New Infolabel]** \link ListItem_AgeRating `ListItem.AgeRating`\endlink
 ///     <p>
 ///   }
 ///   \table_row3{   <b>`ListItem.Overview`</b>,
@@ -7840,7 +7936,7 @@ constexpr std::array<InfoMap, 3> container_str = {{
 ///
 /// -----------------------------------------------------------------------------
 // clang-format off
-constexpr std::array<InfoMap, 233> listitem_labels = {{
+constexpr std::array<InfoMap, 238> listitem_labels = {{
     {"thumb",                         LISTITEM_THUMB},
     {"icon",                          LISTITEM_ICON},
     {"actualicon",                    LISTITEM_ACTUAL_ICON},
@@ -7951,6 +8047,11 @@ constexpr std::array<InfoMap, 233> listitem_labels = {{
     {"trailer",                       LISTITEM_TRAILER},
     {"sortletter",                    LISTITEM_SORT_LETTER},
     {"tag",                           LISTITEM_TAG},
+    {"platform",                      LISTITEM_PLATFORM},
+    {"developer",                     LISTITEM_DEVELOPER},
+    {"publisher",                     LISTITEM_PUBLISHER},
+    {"players",                       LISTITEM_PLAYERS},
+    {"agerating",                     LISTITEM_AGERATING},
     {"set",                           LISTITEM_SET},
     {"setid",                         LISTITEM_SETID},
     {"videocodec",                    LISTITEM_VIDEO_CODEC},
@@ -11357,7 +11458,7 @@ int CGUIInfoManager::TranslateSingleString(const std::string& strCondition, bool
       else if (prop.Name() == "property")
       {
         if (StringUtils::EqualsNoCase(prop.param(), "fanart_image"))
-          return AddMultiInfo(CGUIInfo(PLAYER_ITEM_ART, "fanart"));
+          return AddMultiInfo(CGUIInfo(PLAYER_ITEM_ART, ART::TYPE::FANART));
 
         return AddMultiInfo(CGUIInfo(MUSICPLAYER_PROPERTY, prop.param()));
       }
@@ -11747,7 +11848,7 @@ int CGUIInfoManager::TranslateListItem(const Property& cat,
     if (prop.Name() == "property" && StringUtils::EqualsNoCase(prop.param(), "fanart_image"))
     {
       ret = LISTITEM_ART;
-      data3 = "fanart";
+      data3 = ART::TYPE::FANART;
     }
     else if (prop.Name() == "property" || prop.Name() == "art" || prop.Name() == "rating" ||
              prop.Name() == "votes" || prop.Name() == "ratingandvotes" || prop.Name() == "uniqueid")
@@ -11880,7 +11981,7 @@ std::string CGUIInfoManager::GetLabel(int info, int contextWindow, std::string* 
   }
   else if (info >= MULTI_INFO_START && info <= MULTI_INFO_END)
   {
-    return GetMultiInfoLabel(m_multiInfo[info - MULTI_INFO_START], contextWindow);
+    return GetMultiInfoLabel(GetMultiInfo(info), contextWindow);
   }
   else if (info >= LISTITEM_START && info <= LISTITEM_END)
   {
@@ -11901,7 +12002,7 @@ bool CGUIInfoManager::GetInt(int& value,
 {
   if (info >= MULTI_INFO_START && info <= MULTI_INFO_END)
   {
-    return GetMultiInfoInt(value, m_multiInfo[info - MULTI_INFO_START], contextWindow, item);
+    return GetMultiInfoInt(value, GetMultiInfo(info), contextWindow, item);
   }
   else if (info >= LISTITEM_START && info <= LISTITEM_END)
   {
@@ -11973,7 +12074,7 @@ bool CGUIInfoManager::GetBool(int condition1, int contextWindow, const CGUIListI
   }
   else if (condition >= MULTI_INFO_START && condition <= MULTI_INFO_END)
   {
-    bReturn = GetMultiInfoBool(m_multiInfo[condition - MULTI_INFO_START], contextWindow, item);
+    bReturn = GetMultiInfoBool(GetMultiInfo(condition), contextWindow, item);
   }
   else if (!m_infoProviders.GetBool(bReturn, m_currentFile.get(), contextWindow,
                                     CGUIInfo(condition)))
@@ -12044,8 +12145,7 @@ bool CGUIInfoManager::GetMultiInfoBool(const CGUIInfo& info,
             int iResolvedInfo2 = ResolveMultiInfo(info2);
             if (iResolvedInfo2 != 0)
             {
-              const GUIINFO::CGUIInfo& resolvedInfo2 =
-                  m_multiInfo[iResolvedInfo2 - MULTI_INFO_START];
+              const GUIINFO::CGUIInfo resolvedInfo2 = GetMultiInfo(iResolvedInfo2);
               if (resolvedInfo2.GetInfoFlag() & INFOFLAG_LISTITEM_CONTAINER)
                 item2 = GUIINFO::GetCurrentListItem(
                     contextWindow, resolvedInfo2.GetData1()); // data1 contains the container id
@@ -12226,7 +12326,7 @@ std::string CGUIInfoManager::GetImage(int info, int contextWindow, std::string* 
   }
   else if (info >= MULTI_INFO_START && info <= MULTI_INFO_END)
   {
-    return GetMultiInfoLabel(m_multiInfo[info - MULTI_INFO_START], contextWindow, fallback);
+    return GetMultiInfoLabel(GetMultiInfo(info), contextWindow, fallback);
   }
   else if (info == LISTITEM_THUMB || info == LISTITEM_ICON || info == LISTITEM_ACTUAL_ICON ||
            info == LISTITEM_OVERLAY || info == LISTITEM_ART)
@@ -12245,9 +12345,9 @@ void CGUIInfoManager::ResetCurrentItem()
   m_infoProviders.InitCurrentItem(nullptr);
 }
 
-void CGUIInfoManager::UpdateCurrentItem(const CFileItem& item)
+void CGUIInfoManager::UpdateCurrentItem(const CFileItem& item, bool replaceLabels /* = true */)
 {
-  m_currentFile->UpdateInfo(item);
+  m_currentFile->UpdateInfo(item, replaceLabels);
 }
 
 void CGUIInfoManager::SetCurrentItem(const CFileItem& item)
@@ -12263,10 +12363,10 @@ void CGUIInfoManager::SetCurrentItem(const CFileItem& item)
 void CGUIInfoManager::SetCurrentAlbumThumb(const std::string& thumbFileName)
 {
   if (CFileUtils::Exists(thumbFileName))
-    m_currentFile->SetArt("thumb", thumbFileName);
+    m_currentFile->SetArt(ART::TYPE::THUMB, thumbFileName);
   else
   {
-    m_currentFile->SetArt("thumb", "");
+    m_currentFile->SetArt(ART::TYPE::THUMB, "");
     ART::FillInDefaultIcon(*m_currentFile);
   }
 }
@@ -12317,6 +12417,7 @@ void CGUIInfoManager::UpdateAVInfo() const
 
 int CGUIInfoManager::AddMultiInfo(const CGUIInfo& info)
 {
+  std::unique_lock lock(m_critMultiInfo);
   // check to see if we have this info already
   for (unsigned int i = 0; i < m_multiInfo.size(); ++i)
     if (m_multiInfo[i] == info)
@@ -12329,6 +12430,26 @@ int CGUIInfoManager::AddMultiInfo(const CGUIInfo& info)
   return id;
 }
 
+int CGUIInfoManager::GetMultiInfoValue(int id) const
+{
+  std::unique_lock lock(m_critMultiInfo);
+  const size_t index = static_cast<size_t>(id) - MULTI_INFO_START;
+  if (index >= m_multiInfo.size())
+    return 0;
+  return m_multiInfo[index].GetInfo();
+}
+
+CGUIInfo CGUIInfoManager::GetMultiInfo(int id) const
+{
+  std::unique_lock lock(m_critMultiInfo);
+  const size_t index = static_cast<size_t>(id) - MULTI_INFO_START;
+  // Guards an id AddMultiInfo never returned: the range is wider than the
+  // vector, and ResolveMultiInfo() feeds a block's own data back in as an id.
+  if (index >= m_multiInfo.size())
+    return CGUIInfo(0); // no info, which every provider declines
+  return m_multiInfo[index];
+}
+
 int CGUIInfoManager::ResolveMultiInfo(int info) const
 {
   int iLastInfo = 0;
@@ -12337,7 +12458,7 @@ int CGUIInfoManager::ResolveMultiInfo(int info) const
   while (iResolvedInfo >= MULTI_INFO_START && iResolvedInfo <= MULTI_INFO_END)
   {
     iLastInfo = iResolvedInfo;
-    iResolvedInfo = m_multiInfo[iResolvedInfo - MULTI_INFO_START].GetInfo();
+    iResolvedInfo = GetMultiInfoValue(iResolvedInfo);
   }
 
   return iLastInfo;
@@ -12347,7 +12468,7 @@ bool CGUIInfoManager::IsListItemInfo(int info) const
 {
   int iResolvedInfo = info;
   while (iResolvedInfo >= MULTI_INFO_START && iResolvedInfo <= MULTI_INFO_END)
-    iResolvedInfo = m_multiInfo[iResolvedInfo - MULTI_INFO_START].GetInfo();
+    iResolvedInfo = GetMultiInfoValue(iResolvedInfo);
 
   return (iResolvedInfo >= LISTITEM_START && iResolvedInfo <= LISTITEM_END);
 }
@@ -12389,8 +12510,7 @@ std::string CGUIInfoManager::GetMultiInfoItemLabel(const CFileItem* item,
   }
   else if (info.GetInfo() >= MULTI_INFO_START && info.GetInfo() <= MULTI_INFO_END)
   {
-    return GetMultiInfoItemLabel(item, contextWindow,
-                                 m_multiInfo[info.GetInfo() - MULTI_INFO_START], fallback);
+    return GetMultiInfoItemLabel(item, contextWindow, GetMultiInfo(info.GetInfo()), fallback);
   }
   else if (!m_infoProviders.GetLabel(value, item, contextWindow, info, fallback))
   {
@@ -12439,14 +12559,14 @@ std::string CGUIInfoManager::GetMultiInfoItemLabel(const CFileItem* item,
       case LISTITEM_PROGRAM_COUNT:
         return std::to_string(item->GetProgramCount());
       case LISTITEM_ACTUAL_ICON:
-        return item->GetArt("icon");
+        return item->GetArt(ART::TYPE::ICON);
       case LISTITEM_ICON:
       {
         std::string strThumb = item->GetThumbHideIfUnwatched(item);
         if (strThumb.empty())
-          strThumb = item->GetArt("icon");
+          strThumb = item->GetArt(ART::TYPE::ICON);
         if (fallback)
-          *fallback = item->GetArt("icon");
+          *fallback = item->GetArt(ART::TYPE::ICON);
         return strThumb;
       }
       case LISTITEM_ART:
@@ -12531,8 +12651,7 @@ std::string CGUIInfoManager::GetMultiInfoItemImage(const CFileItem* item,
   }
   else if (info.GetInfo() >= MULTI_INFO_START && info.GetInfo() <= MULTI_INFO_END)
   {
-    return GetMultiInfoItemImage(item, contextWindow,
-                                 m_multiInfo[info.GetInfo() - MULTI_INFO_START], fallback);
+    return GetMultiInfoItemImage(item, contextWindow, GetMultiInfo(info.GetInfo()), fallback);
   }
 
   return GetMultiInfoItemLabel(item, contextWindow, info, fallback);
@@ -12629,6 +12748,8 @@ int CGUIInfoManager::RegisterSkinVariableString(const CSkinVariableString* info)
 
 int CGUIInfoManager::TranslateSkinVariableString(const std::string& name, int context)
 {
+  std::unique_lock lock(m_critInfo);
+
   for (std::vector<CSkinVariableString>::const_iterator it = m_skinVariableStrings.begin();
        it != m_skinVariableStrings.end(); ++it)
   {
@@ -12644,10 +12765,19 @@ std::string CGUIInfoManager::GetSkinVariableString(int info,
                                                    const CGUIListItem* item /*= nullptr*/) const
 {
   info -= CONDITIONAL_LABEL_START;
-  if (info >= 0 && info < static_cast<int>(m_skinVariableStrings.size()))
-    return m_skinVariableStrings[info].GetValue(contextWindow, preferImage, item);
 
-  return "";
+  std::optional<CSkinVariableString> variable;
+  {
+    std::unique_lock lock(m_critInfo);
+    if (info < 0 || info >= static_cast<int>(m_skinVariableStrings.size()))
+      return "";
+
+    variable = m_skinVariableStrings[info];
+  }
+
+  // Evaluated on the copy, with the lock let go. A skin variable may hold
+  // another, so this reaches back into the manager before it returns.
+  return variable->GetValue(contextWindow, preferImage, item);
 }
 
 bool CGUIInfoManager::ConditionsChangedValues(const std::map<INFO::InfoPtr, bool>& map) const

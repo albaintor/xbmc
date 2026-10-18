@@ -25,6 +25,9 @@
 #include "resources/ResourcesComponent.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/ArtTypes.h"
+#include "utils/ItemProperties.h"
+#include "utils/Mp4ChplReader.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/log.h"
@@ -114,10 +117,7 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
 
   std::string thumb;
   thumb = IMAGE_FILES::URLFromFile(url.Get(), "music");
-  /*! Look for any embedded cover art
-  * FFmpeg rather than TagLib: TagLib reads whole Matroska attachments eagerly, which is slow for
-  * large attachments over SMB/NFS. Still unfixed as of TagLib 2.3.1 (it was expected there).
-  */
+  /*! Look for any embedded cover art */
   CMusicEmbeddedCoverLoaderFFmpeg::GetEmbeddedCover(fctx, albumtag);
 
   // now get the AudioCodec -------------------------------------
@@ -151,6 +151,32 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
       isAudioBook ? (fctx->chapters ? fctx->nb_chapters : 0) : m_read->album.chapters.size();
   int trackNumber = 0;
   bool chapter_error = false;
+
+  ChplChapterResult neroChapterResult{chplNone};
+  std::vector<ChplChapter> nero;
+
+  if (isAudioBook && fctx->nb_chapters > 1)
+  {
+    neroChapterResult = CChplChapterReader::ScanNeroChapters(url, nero);
+    if (neroChapterResult.IsError())
+    {
+      CLog::Log(LOGERROR,
+                "AudioBookFileDirectory: Error scanning for Nero style chapters in file {}. The "
+                "error returned was {}",
+                url.GetRedacted(), *neroChapterResult.errorMessage);
+    }
+    else if (neroChapterResult.IsNone())
+    { // can't get here without some form of chapter so must be QT style chapters (chap atom)
+      CLog::Log(
+          LOGDEBUG,
+          "AudioBookFileDirectory: Scanned for nero style chapters but didn't find any in {}, "
+          "using QT chapters",
+          url.GetRedacted());
+    }
+  }
+
+  const size_t ns = nero.size();
+
   for (size_t i = 0; i < chapterCount; ++i)
   {
     double start = 0.0;
@@ -228,6 +254,10 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
         else if (StringUtils::CompareNoCase(tag->key, "album") == 0)
           chapalbum = tag->value;
       }
+      // Prefer nero titles if we have them over QT titles and they are different
+      if (neroChapterResult.IsFound() && (i < ns) && !nero[i].title.empty() &&
+          (nero[i].title != chaptitle))
+        chaptitle = nero[i].title;
       item->GetMusicInfoTag()->SetTitle(chaptitle);
       item->GetMusicInfoTag()->SetAlbum(chapalbum.empty() ? album.empty() ? title : album
                                                           : chapalbum);
@@ -268,10 +298,9 @@ bool CAudioBookFileDirectory::GetDirectory(const CURL& url, CFileItemList& items
         "{0:02}. {1} - {2}", item->GetMusicInfoTag()->GetTrackNumber(),
         item->GetMusicInfoTag()->GetAlbum(), item->GetMusicInfoTag()->GetTitle()));
 
-    item->SetProperty("item_start", item->GetStartOffset());
-    item->SetProperty("audio_bookmark", item->GetStartOffset());
+    item->SetProperty(KODI::ITEM::PROPERTY::ITEM_START, item->GetStartOffset());
     if (!thumb.empty() && !chapter_error)
-      item->SetArt("thumb", thumb);
+      item->SetArt(KODI::ART::TYPE::THUMB, thumb);
     items.Add(item);
   }
   return true;

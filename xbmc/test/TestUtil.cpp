@@ -10,6 +10,7 @@
 #include "Util.h"
 #include "cores/VideoPlayer/Interface/StreamInfo.h"
 #include "settings/AdvancedSettings.h"
+#include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
@@ -38,6 +39,24 @@ TEST(TestUtil, GetQualifiedFilename)
   file = "smb://foo/bar/";
   CUtil::GetQualifiedFilename("upnp://", file);
   EXPECT_EQ(file, "smb://foo/bar/");
+}
+
+TEST(TestUtil, IsInPlaylistsFolderFollowsThePlaylistsSetting)
+{
+  using KODI::MEDIA::MediaSection;
+  const auto settings = CServiceBroker::GetSettingsComponent()->GetSettings();
+  const std::string original{settings->GetString(CSettings::SETTING_SYSTEM_PLAYLISTSPATH)};
+  settings->SetString(CSettings::SETTING_SYSTEM_PLAYLISTSPATH, "special://temp/lists/");
+
+  EXPECT_TRUE(CUtil::IsInPlaylistsFolder("special://temp/lists/video/a.m3u", MediaSection::VIDEO));
+  EXPECT_FALSE(CUtil::IsInPlaylistsFolder("special://temp/lists/video/a.m3u", MediaSection::MUSIC));
+  EXPECT_TRUE(CUtil::IsInPlaylistsFolder("special://temp/lists/mixed/a.m3u", MediaSection::MUSIC));
+  EXPECT_TRUE(CUtil::IsInPlaylistsFolder("special://musicplaylists/a.xsp", MediaSection::MUSIC));
+  EXPECT_FALSE(
+      CUtil::IsInPlaylistsFolder("special://profile/playlists/video/a.m3u", MediaSection::VIDEO));
+  EXPECT_FALSE(CUtil::IsInPlaylistsFolder("special://temp/lists/video/a.m3u", MediaSection::FILES));
+
+  settings->SetString(CSettings::SETTING_SYSTEM_PLAYLISTSPATH, original);
 }
 
 TEST(TestUtil, MakeLegalPath)
@@ -865,9 +884,11 @@ TEST_P(TestMatchingSource, GetMatchingSource)
   for (const auto& source : Sources)
   {
     const std::string sourcePath{replaceOpticalTestDrive(source.path)};
-    CMediaSource mediaSource{
-        source.name, "",           "",    sourcePath, SourceType::REMOTE, KODI::UTILS::CLockInfo{},
-        "",          {sourcePath}, false, true};
+    CMediaSource mediaSource;
+    mediaSource.strName = source.name;
+    mediaSource.strPath = sourcePath;
+    mediaSource.m_iDriveType = SourceType::REMOTE;
+    mediaSource.vecPaths = {sourcePath};
     sources.emplace_back(mediaSource);
   }
 
@@ -928,3 +949,92 @@ TEST_P(TestExternalStreamDetails, GetExternalStreamDetailsFromFilename)
 INSTANTIATE_TEST_SUITE_P(GetExternalStreamDetailsFromFilename,
                          TestExternalStreamDetails,
                          ValuesIn(ExternalStreams));
+
+/*!
+ * A percent-encoded path reaches here from any VFS that escapes its names - WebDAV among them.
+ * Hiding the extension must not hand back the escaped form.
+ */
+class TestTitleFromPath : public Test
+{
+protected:
+  void SetUp() override
+  {
+    const auto settings = CServiceBroker::GetSettingsComponent()->GetSettings();
+    m_showExtensions = settings->GetBool(CSettings::SETTING_FILELISTS_SHOWEXTENSIONS);
+    settings->SetBool(CSettings::SETTING_FILELISTS_SHOWEXTENSIONS, false);
+  }
+
+  void TearDown() override
+  {
+    CServiceBroker::GetSettingsComponent()->GetSettings()->SetBool(
+        CSettings::SETTING_FILELISTS_SHOWEXTENSIONS, m_showExtensions);
+  }
+
+private:
+  bool m_showExtensions{true};
+};
+
+TEST_F(TestTitleFromPath, DecodesAnEscapedNameWhileHidingTheExtension)
+{
+  EXPECT_EQ("file name", CUtil::GetTitleFromPath("davs://server/files/file%20name.mkv"));
+  EXPECT_EQ("file_name", CUtil::GetTitleFromPath("davs://server/files/file_name.mkv"));
+}
+
+/*! A local path is not escaped, so decoding one would corrupt every name holding a plus. */
+TEST_F(TestTitleFromPath, LeavesALocalNameAlone)
+{
+  EXPECT_EQ("C++ Media", CUtil::GetTitleFromPath("/path/to/C++ Media.mkv"));
+  EXPECT_EQ("100% proof", CUtil::GetTitleFromPath("/path/to/100% proof.mkv"));
+}
+
+TEST_F(TestTitleFromPath, KeepsAPlusInTheName)
+{
+  EXPECT_EQ("C++ Collection", CUtil::GetTitleFromPath("smb://server/share/C++ Collection.mkv"));
+  EXPECT_EQ("C++ Collection", CUtil::GetTitleFromPath("davs://server/files/C++ Collection.mkv"));
+}
+
+TEST_F(TestTitleFromPath, DecodesAnEscapedPercent)
+{
+  EXPECT_EQ("100% proof", CUtil::GetTitleFromPath("davs://server/files/100%25%20proof.mkv"));
+
+  // a name that itself contains the characters "%20"
+  EXPECT_EQ("100%20proof", CUtil::GetTitleFromPath("davs://server/files/100%2520proof.mkv"));
+
+  // the name is taken off the path before the decode, so an escaped separator stays in the leaf
+  EXPECT_EQ("file/name", CUtil::GetTitleFromPath("davs://server/files/file%2Fname.mkv"));
+}
+
+TEST_F(TestTitleFromPath, LeavesAMalformedEscapeAlone)
+{
+  EXPECT_EQ("file%2", CUtil::GetTitleFromPath("davs://server/files/file%2.mkv"));
+  EXPECT_EQ("file%zz", CUtil::GetTitleFromPath("davs://server/files/file%zz.mkv"));
+  EXPECT_EQ("file%", CUtil::GetTitleFromPath("davs://server/files/file%.mkv"));
+  EXPECT_EQ("100% off", CUtil::GetTitleFromPath("davs://server/files/100% off.mkv"));
+}
+
+TEST_F(TestTitleFromPath, LeavesANameOnANonEscapingProtocolAlone)
+{
+  EXPECT_EQ("file name", CUtil::GetTitleFromPath("smb://server/share/file name.mkv"));
+  EXPECT_EQ("file name", CUtil::GetTitleFromPath("nfs://server/export/file name.mkv"));
+  EXPECT_EQ("file name", CUtil::GetTitleFromPath("ftp://server/pub/file name.mkv"));
+  EXPECT_EQ("100% proof", CUtil::GetTitleFromPath("smb://server/share/100% proof.mkv"));
+}
+
+TEST_F(TestTitleFromPath, DecodesAnArchiveNameOnlyWhenItsParentIsAUrl)
+{
+  EXPECT_EQ(
+      "100% proof.zip",
+      CUtil::GetTitleFromPath("zip://davs%3a%2f%2fserver%2ffiles%2f100%2525%2520proof.zip/", true));
+  EXPECT_EQ("100%20proof.zip",
+            CUtil::GetTitleFromPath("zip://%2fmedia%2f100%2520proof.zip/", true));
+}
+
+TEST(TestUtil, FoundationNativeAndNestedNormalization)
+{
+  EXPECT_EQ("relative?name#part+100%.mkv", CUtil::ValidatePath("relative?name#part+100%.mkv"));
+  EXPECT_EQ("C:relative", CUtil::ValidatePath("C:relative"));
+  EXPECT_EQ("./notes:2026", CUtil::ValidatePath("./notes:2026"));
+  EXPECT_EQ("zip://%2ftmp%2fa.zip/dir//a.mkv",
+            CUtil::ValidatePath("zip://%2ftmp%2fa.zip/dir//a.mkv", true));
+  EXPECT_EQ("http://server/a%2Fb//c", CUtil::ValidatePath("http://server/a%2Fb//c", true));
+}

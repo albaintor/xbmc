@@ -8,11 +8,11 @@
 
 #include "AdvancedSettings.h"
 
-#include "LangInfo.h"
 #include "ServiceBroker.h"
 #include "URL.h"
 #include "application/AppParams.h"
 #include "filesystem/SpecialProtocol.h"
+#include "language/LangInfo.h"
 #include "network/DNSNameCache.h"
 #include "profiles/ProfileManager.h"
 #include "resources/LocalizeStrings.h"
@@ -70,6 +70,26 @@ void ParseDatabaseSettings(const TiXmlElement* element, DatabaseSettings& settin
   XMLUtils::GetBoolean(element, "compression", settings.compression);
 }
 } // unnamed namespace
+
+const std::vector<std::string>& CAdvancedSettings::GetExcludeFromListingRegExps(
+    KODI::MEDIA::MediaSection section) const
+{
+  static const std::vector<std::string> none;
+  switch (section)
+  {
+    case KODI::MEDIA::MediaSection::VIDEO:
+      return m_videoExcludeFromListingRegExps;
+    case KODI::MEDIA::MediaSection::MUSIC:
+      return m_audioExcludeFromListingRegExps;
+    case KODI::MEDIA::MediaSection::PICTURES:
+      return m_pictureExcludeFromListingRegExps;
+    case KODI::MEDIA::MediaSection::FILES:
+    case KODI::MEDIA::MediaSection::PROGRAMS:
+    case KODI::MEDIA::MediaSection::GAMES:
+      break;
+  }
+  return none;
+}
 
 void CAdvancedSettings::OnSettingsLoaded()
 {
@@ -403,6 +423,7 @@ void CAdvancedSettings::Initialize()
   m_iVideoLibraryDateAdded = 1; // prefer mtime over ctime and current time
   m_minimumEpisodePlaylistDuration = 5 * 60; // 5 minutes
   m_disableEpisodeRanges = false;
+  m_parseBlurayProjectFile = true;
 
   m_caseSensitiveLocalArtMatch = true; // case sensitive local art matching
   m_bNoRemoteArtWithLocalScraper =
@@ -913,6 +934,7 @@ void CAdvancedSettings::ParseSettingsFile(const std::string &file)
     XMLUtils::GetBoolean(pElement, "casesensitivelocalartmatch", m_caseSensitiveLocalArtMatch);
     XMLUtils::GetInt(pElement, "minimumepisodeplaylistduration", m_minimumEpisodePlaylistDuration);
     XMLUtils::GetBoolean(pElement, "disableepisoderanges", m_disableEpisodeRanges);
+    XMLUtils::GetBoolean(pElement, "parseblurayprojectfile", m_parseBlurayProjectFile);
     XMLUtils::GetBoolean(pElement, "noremoteartwithlocalscraper", m_bNoRemoteArtWithLocalScraper);
     XMLUtils::GetBoolean(pElement, "ignorefoldernamesinarchives", m_ignoreFolderNamesInArchives);
   }

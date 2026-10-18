@@ -10,6 +10,7 @@
 
 #include "SetInfoTag.h"
 #include "XBDateTime.h"
+#include "media/MediaType.h"
 #include "utils/EmbeddedArt.h"
 #include "utils/Fanart.h"
 #include "utils/ISortable.h"
@@ -99,6 +100,7 @@ public:
   const std::map<std::string, std::string, std::less<>>& GetUniqueIDs() const;
   const std::string& GetDefaultUniqueID() const;
   bool HasUniqueID() const;
+  bool HasConflictingUniqueID(const CVideoInfoTag& other) const;
   virtual bool HasYear() const;
   virtual int GetYear() const;
   bool HasPremiered() const;
@@ -106,6 +108,10 @@ public:
   const CDateTime& GetFirstAired() const;
   std::string GetCast(const std::string& separator, bool bIncludeRole = false) const;
   bool HasStreamDetails() const;
+
+  //! \brief The media type m_type names, NONE where it names a node such as a genre, or is spelled otherwise.
+  KODI::MEDIA::TYPE GetMediaType() const;
+  void SetMediaType(KODI::MEDIA::TYPE type);
   bool HasNFOStreamDetails() const;
   bool IsEmpty() const;
 
@@ -438,7 +444,7 @@ public:
   CFanart m_fanart;
   CStreamDetails m_streamDetails;
   CDateTime m_dateAdded;
-  MediaType m_type;
+  std::string m_type; //!< the table m_iDbId is in: a media type, or a node such as genre
   int m_relevance; // Used for actors' number of appearances
   int m_parsedDetails;
   std::vector<EmbeddedArtInfo> m_coverArt; ///< art information

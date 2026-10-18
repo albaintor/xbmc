@@ -3,6 +3,7 @@ set(SOURCES ActorProtocol.cpp
             AliasShortcutUtils.cpp
             Archive.cpp
             ArtUtils.cpp
+            AspectRatioVocabulary.cpp
             Base64.cpp
             BitstreamConverter.cpp
             BitstreamReader.cpp
@@ -19,6 +20,7 @@ set(SOURCES ActorProtocol.cpp
             DatabaseUtils.cpp
             Digest.cpp
             DiscsUtils.cpp
+            DolbyVisionRpu.cpp
             EndianSwap.cpp
             EmbeddedArt.cpp
             EpisodeUtils.cpp
@@ -42,7 +44,6 @@ set(SOURCES ActorProtocol.cpp
             JSONVariantWriter.cpp
             LabelFormatter.cpp
             LangCodeExpander.cpp
-            LanguageTag.cpp
             LegacyPathTranslation.cpp
             Locale.cpp
             log.cpp
@@ -72,6 +73,7 @@ set(SOURCES ActorProtocol.cpp
             Temperature.cpp
             TextSearch.cpp
             TimeUtils.cpp
+            URIParser.cpp
             URIUtils.cpp
             UrlOptions.cpp
             Utf8Utils.cpp
@@ -86,8 +88,10 @@ set(HEADERS ActorProtocol.h
             AlarmClock.h
             AliasShortcutUtils.h
             Archive.h
+            ArtTypes.h
             ArtUtils.h
             Artwork.h
+            AspectRatioVocabulary.h
             Base64.h
             BitstreamConverter.h
             BitstreamReader.h
@@ -99,12 +103,15 @@ set(HEADERS ActorProtocol.h
             CPUInfo.h
             ColorUtils.h
             ComponentContainer.h
+            ContentNames.h
             ContentUtils.h
             Crc32.h
             CSSUtils.h
             DatabaseUtils.h
+            DefaultArt.h
             Digest.h
             DiscsUtils.h
+            DolbyVisionRpu.h
             EndianSwap.h
             EpisodeUtils.h
             EventStream.h
@@ -137,11 +144,11 @@ set(HEADERS ActorProtocol.h
             ISerializable.h
             ISortable.h
             IXmlDeserializable.h
+            ItemProperties.h
             JSONVariantParser.h
             JSONVariantWriter.h
             LabelFormatter.h
             LangCodeExpander.h
-            LanguageTag.h
             LegacyPathTranslation.h
             Locale.h
             LockInfo.h
@@ -156,6 +163,7 @@ set(HEADERS ActorProtocol.h
             Observer.h
             params_check_macros.h
             POUtils.h
+            PlaceholderPaths.h
             PlayerUtils.h
             ProgressJob.h
             RecentlyAddedJob.h
@@ -182,6 +190,7 @@ set(HEADERS ActorProtocol.h
             TimeFormat.h
             TimeUtils.h
             TransformMatrix.h
+            URIParser.h
             URIUtils.h
             UrlOptions.h
             Utf8Utils.h
@@ -210,8 +219,12 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL Clang)
 endif()
 
 if(TARGET ${APP_NAME_LC}::OpenGl OR TARGET ${APP_NAME_LC}::OpenGLES)
-  list(APPEND SOURCES GLUtils.cpp)
-  list(APPEND HEADERS GLUtils.h)
+  list(APPEND SOURCES GLBufferArena.cpp
+                      GLBufferObject.cpp
+                      GLUtils.cpp)
+  list(APPEND HEADERS GLBufferArena.h
+                      GLBufferObject.h
+                      GLUtils.h)
 endif()
 
 if("gbm" IN_LIST CORE_PLATFORM_NAME_LC OR "wayland" IN_LIST CORE_PLATFORM_NAME_LC)

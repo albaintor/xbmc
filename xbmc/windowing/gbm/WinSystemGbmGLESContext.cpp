@@ -11,6 +11,7 @@
 #include "OptionalsReg.h"
 #include "cores/RetroPlayer/process/gbm/RPProcessInfoGbm.h"
 #include "cores/RetroPlayer/rendering/VideoRenderers/RPRendererDMAOpenGLES.h"
+#include "cores/RetroPlayer/rendering/VideoRenderers/RPRendererFBO.h"
 #include "cores/RetroPlayer/rendering/VideoRenderers/RPRendererOpenGLES.h"
 #include "cores/VideoPlayer/DVDCodecs/DVDFactoryCodec.h"
 #include "cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecDRMPRIME.h"
@@ -66,6 +67,7 @@ bool CWinSystemGbmGLESContext::InitWindowSystem()
   RETRO::CRPProcessInfoGbm::Register();
   RETRO::CRPProcessInfoGbm::RegisterRendererFactory(new RETRO::CRendererFactoryDMAOpenGLES);
   RETRO::CRPProcessInfoGbm::RegisterRendererFactory(new RETRO::CRendererFactoryOpenGLES);
+  RETRO::CRPProcessInfoGbm::RegisterRendererFactory(new RETRO::CRendererFactoryFBO);
 
   // GLES 3.0 required for 10-bit texture format support (GL_RGB10_A2, GL_R16UI, etc.)
   // Fall back to GLES 2.0 for devices that don't support GLES 3.0 (e.g. lima driver)
@@ -182,13 +184,8 @@ void CWinSystemGbmGLESContext::PresentRender(bool rendered, bool videoLayer)
 
   if (m_dispReset && m_dispResetTimer.IsTimePast())
   {
-    CLog::Log(LOGDEBUG, "CWinSystemGbmGLESContext::{} - Sending display reset to all clients",
-              __FUNCTION__);
     m_dispReset = false;
-    std::unique_lock lock(m_resourceSection);
-
-    for (auto resource : m_resources)
-      resource->OnResetDisplay();
+    CWinSystemGbm::OnResetDisplay();
   }
 }
 
@@ -374,11 +371,9 @@ void CWinSystemGbmGLESContext::CompositeGui()
   else
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-  // set up orthographic projection (screen coords, Y-down)
-  float w = static_cast<float>(m_guiFboWidth);
-  float h = static_cast<float>(m_guiFboHeight);
-
-  GLfloat proj[16] = {2.0f / w, 0, 0, 0, 0, -2.0f / h, 0, 0, 0, 0, -1, 0, -1.0f, 1.0f, 0, 1};
+  // The unit quad doubles as texture coordinates; mapping it to clip space with y up keeps the
+  // FBO texture, whose first row is the bottom of the GUI, upright.
+  GLfloat proj[16] = {2, 0, 0, 0, 0, 2, 0, 0, 0, 0, -1, 0, -1, -1, 0, 1};
 
   m_compositeShader->SetProjection(proj);
   m_compositeShader->Enable();
@@ -386,19 +381,18 @@ void CWinSystemGbmGLESContext::CompositeGui()
   GLint posLoc = m_compositeShader->GetPosLoc();
   GLint texLoc = m_compositeShader->GetTexLoc();
 
-  GLfloat vert[4][2] = {{0, 0}, {w, 0}, {w, h}, {0, h}};
-  GLfloat tex[4][2] = {{0, 1}, {1, 1}, {1, 0}, {0, 0}};
-  GLubyte idx[4] = {0, 1, 3, 2};
+  BindGUIUnitQuad();
+  for (GLint loc : {posLoc, texLoc})
+  {
+    glVertexAttribPointer(loc, 2, GL_FLOAT, GL_FALSE, 0, 0);
+    glEnableVertexAttribArray(loc);
+  }
 
-  glVertexAttribPointer(posLoc, 2, GL_FLOAT, GL_FALSE, 0, vert);
-  glVertexAttribPointer(texLoc, 2, GL_FLOAT, GL_FALSE, 0, tex);
-  glEnableVertexAttribArray(posLoc);
-  glEnableVertexAttribArray(texLoc);
-
-  glDrawElements(GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_BYTE, idx);
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
   glDisableVertexAttribArray(posLoc);
   glDisableVertexAttribArray(texLoc);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
 
   m_compositeShader->Disable();
 }

@@ -36,7 +36,9 @@ namespace GAME
 {
 class CGameClientDiscModel;
 
+class CGameClientCheats;
 class CGameClientCheevos;
+class CGameClientFastForward;
 class CGameClientInGameSaves;
 class CGameClientInput;
 class CGameClientProperties;
@@ -127,6 +129,7 @@ public:
   ~CGameClient() override;
 
   // Game subsystems (const)
+  const CGameClientCheats& Cheats() const { return *m_subsystems.Cheats; }
   const CGameClientCheevos& Cheevos() const { return *m_subsystems.Cheevos; }
   const CGameClientDiscs& Discs() const { return *m_subsystems.Discs; }
   const CGameClientInput& Input() const { return *m_subsystems.Input; }
@@ -134,6 +137,7 @@ public:
   const CGameClientStreams& Streams() const { return *m_subsystems.Streams; }
 
   // Game subsystems (mutable)
+  CGameClientCheats& Cheats() { return *m_subsystems.Cheats; }
   CGameClientCheevos& Cheevos() { return *m_subsystems.Cheevos; }
   CGameClientDiscs& Discs() { return *m_subsystems.Discs; }
   CGameClientInput& Input() { return *m_subsystems.Input; }
@@ -153,6 +157,7 @@ public:
   bool IsExtensionValid(const std::string& strExtension) const;
   const std::string& GetEmulatorName() const { return m_emulatorName; }
   const std::string& GetPlatforms() const { return m_platforms; }
+  const std::string& GetLibretroCore() const { return m_libretroCore; }
   bool SupportsDiscControl() const { return m_supportsDiscControl; }
 
   // Start/stop gameplay
@@ -169,7 +174,6 @@ public:
   // Playback control
   bool RequiresGameLoop() const { return m_bRequiresGameLoop; }
   bool IsPlaying() const { return m_bIsPlaying; }
-  size_t GetSerializeSize() const { return m_serializeSize; }
   double GetFrameRate() const { return m_framerate.load(); }
   double GetSampleRate() const { return m_samplerate.load(); }
   void PollInput();
@@ -189,7 +193,12 @@ public:
   void SetPlaybackSpeed(double speed) { m_playbackSpeed = speed; }
 
   // Access memory
-  size_t SerializeSize() const { return m_serializeSize; }
+  enum class SerializeSizeMode
+  {
+    Lazy,
+    Restore,
+  };
+  size_t GetSerializeSize(SerializeSizeMode mode = SerializeSizeMode::Lazy) const;
   bool Serialize(uint8_t* data, size_t size);
   RestoreResult Deserialize(const uint8_t* data,
                             size_t size,
@@ -198,11 +207,8 @@ public:
   /*!
    * \brief Hold the client still for the duration of a savestate snapshot
    *
-   * The emulator's memory and the achievement state have to describe the same
-   * frame. Both are read from a worker thread while the game loop runs, so
-   * locking each read on its own is not enough - RunFrame() would still be
-   * free to advance between them, pairing one frame's memory with another
-   * frame's achievement progress.
+   * Callers combining core and achievement state hold this lock across both
+   * operations. Acquire the playback lock first when both locks are needed.
    *
    * The lock is recursive, so the calls made while holding it may take it
    * again.
@@ -230,7 +236,8 @@ public:
   bool DeserializeAchievements(const uint8_t* data, size_t size);
 
   // Implementation of IHwFramebufferCallback
-  void HardwareContextReset() override;
+  bool HardwareContextReset() override;
+  void HardwareContextDestroy() override;
 
   /*!
    * @brief To get the interface table used between addon and kodi
@@ -249,6 +256,7 @@ private:
                           RETRO::IStreamManager& streamManager,
                           IGameInputCallback* input);
   bool LoadGameInfo();
+  bool UnloadGame();
   void NotifyError(GAME_ERROR error);
   std::string GetMissingResource();
 
@@ -262,8 +270,11 @@ private:
   static bool cb_enable_hardware_rendering(void* kodiInstance,
                                            const game_hw_rendering_properties* properties);
   static void cb_close_game(KODI_HANDLE kodiInstance);
+  static void cb_report_missing_file(KODI_HANDLE kodiInstance, const char* path);
   static double cb_get_playback_speed(KODI_HANDLE kodiInstance);
+  static void cb_set_fast_forwarding(KODI_HANDLE kodiInstance, bool fastForward, double ratio);
   static void cb_set_game_timing(KODI_HANDLE kodiInstance, const game_system_timing* timingInfo);
+  static bool cb_start_stream(KODI_HANDLE kodiInstance, KODI_GAME_STREAM_HANDLE stream);
   static KODI_GAME_STREAM_HANDLE cb_open_stream(KODI_HANDLE kodiInstance,
                                                 const game_stream_properties* properties);
   static bool cb_get_stream_buffer(KODI_HANDLE kodiInstance,
@@ -346,6 +357,7 @@ private:
   bool m_bSupportsAllExtensions = false;
   std::string m_emulatorName;
   std::string m_platforms;
+  std::string m_libretroCore;
   bool m_supportsDiscControl{false};
 
   // Properties of the current playing file
@@ -362,9 +374,11 @@ private:
   // would read as paused and have a client behave as though the user had
   // stopped the game before it started.
   std::atomic<double> m_playbackSpeed{1.0};
+  const std::unique_ptr<CGameClientFastForward> m_fastForward;
   std::string m_gamePath;
+  std::string m_missingFile; // The first file the client reported missing while loading
   bool m_bRequiresGameLoop = false;
-  size_t m_serializeSize = 0;
+  mutable size_t m_serializeSize = 0;
   IGameInputCallback* m_input = nullptr; // The input callback passed to OpenFile()
   std::atomic<double> m_framerate{0.0}; // Video frame rate (fps)
   std::atomic<double> m_samplerate{0.0}; // Audio sample rate (Hz)
@@ -373,7 +387,7 @@ private:
   // In-game saves
   std::unique_ptr<CGameClientInGameSaves> m_inGameSaves;
 
-  CCriticalSection m_critSection;
+  mutable CCriticalSection m_critSection;
 };
 
 } // namespace GAME

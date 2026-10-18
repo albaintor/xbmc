@@ -63,7 +63,7 @@ constexpr uint32_t PLAYER_CAN_SEEK                   = 51;
 constexpr uint32_t PLAYER_START_TIME                 = 52;
 // unused id 53
 constexpr uint32_t PLAYER_ISINTERNETSTREAM           = 54;
-// unused id 55
+constexpr uint32_t PLAYER_SEEKSTEPVALUE              = 55;
 constexpr uint32_t PLAYER_SEEKSTEPSIZE               = 56;
 constexpr uint32_t PLAYER_IS_CHANNEL_PREVIEW_ACTIVE  = 57;
 constexpr uint32_t PLAYER_SUPPORTS_TEMPO             = 58;
@@ -362,6 +362,9 @@ constexpr uint32_t RETROPLAYER_ACHIEVEMENTS_INDICATOR_TITLE = 1719;
 constexpr uint32_t RETROPLAYER_ACHIEVEMENTS_INDICATOR_BADGE = 1720;
 constexpr uint32_t RETROPLAYER_ACHIEVEMENTS_INDICATOR_PROGRESS = 1721;
 constexpr uint32_t RETROPLAYER_ACHIEVEMENTS_INDICATOR_PERCENT = 1722;
+constexpr uint32_t RETROPLAYER_HAS_CHEATS = 1723;
+constexpr uint32_t RETROPLAYER_SUPPORTS_CHEATS = 1724;
+constexpr uint32_t RETROPLAYER_ACHIEVEMENTS_HARDCORE = 1725;
 constexpr uint32_t RETROPLAYER_SUPPORTS_EJECT        = 1700;
 constexpr uint32_t RETROPLAYER_DISC_EJECTED          = 1701;
 constexpr uint32_t RETROPLAYER_DISC_LABEL            = 1702;
@@ -1078,6 +1081,11 @@ constexpr uint32_t LISTITEM_FIRST_SUBTITLE_LANGUAGE = LISTITEM_START + 229;
 constexpr uint32_t LISTITEM_FIRST_AUDIO_CODEC      = LISTITEM_START + 230;
 constexpr uint32_t LISTITEM_FIRST_AUDIO_CHANNELS   = LISTITEM_START + 231;
 constexpr uint32_t LISTITEM_ISDEFAULTVIDEOVERSION_NAME = LISTITEM_START + 232;
+constexpr uint32_t LISTITEM_PLATFORM                 = LISTITEM_START + 233;
+constexpr uint32_t LISTITEM_DEVELOPER                = LISTITEM_START + 234;
+constexpr uint32_t LISTITEM_PUBLISHER                = LISTITEM_START + 235;
+constexpr uint32_t LISTITEM_PLAYERS                  = LISTITEM_START + 236;
+constexpr uint32_t LISTITEM_AGERATING                = LISTITEM_START + 237;
 
 constexpr int      LISTITEM_END                      = LISTITEM_START + 2500;
 
