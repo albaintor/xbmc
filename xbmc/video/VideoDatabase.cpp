@@ -2820,8 +2820,11 @@ int CVideoDatabase::SetDetailsForTvShow(const std::vector<std::string>& paths,
                                         const KODI::ART::Artwork& artwork,
                                         const KODI::ART::SeasonsArtwork& seasonArt,
                                         int idTvShow /*= -1 */,
-                                        bool exactPathOnly /*= false */)
+                                        bool exactPathOnly /*= false */,
+                                        bool* createdNewShow /*= nullptr */)
 {
+  if (createdNewShow)
+    *createdNewShow = false;
 
   /*
    The steps are as follows.
@@ -2884,6 +2887,8 @@ int CVideoDatabase::SetDetailsForTvShow(const std::vector<std::string>& paths,
     idTvShow = AddTvShow();
     if (idTvShow < 0)
       return -1;
+    if (createdNewShow)
+      *createdNewShow = true;
   }
 
   // add any paths to the tvshow

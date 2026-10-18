@@ -772,7 +772,10 @@ CVideoInfoScanner::~CVideoInfoScanner()
               continue;
             ++numberedEpisodes;
 
-            const std::string filename{URIUtils::GetFileName(file->GetPath())};
+            // The default by-title expression requires the directory separator.
+            // Match against the same complete path as EnumerateEpisodeItem().
+            const std::string filePath{file->GetPath()};
+            const size_t nameStart{filePath.size() - URIUtils::GetFileName(filePath).size()};
             for (const auto& expression : m_advancedSettings->m_tvshowEnumRegExps)
             {
               const auto regex{KODI::REGEXP::GetRegExp(
@@ -780,11 +783,15 @@ CVideoInfoScanner::~CVideoInfoScanner()
               if (!regex)
                 continue;
 
-              const int offset{regex->RegFind(filename.c_str())};
-              if (offset <= 0)
+              const int offset{regex->RegFind(filePath.c_str())};
+              if (offset < 0)
                 continue;
 
-              std::string title{filename.substr(0, static_cast<size_t>(offset))};
+              std::string title;
+              if (expression.byTitle)
+                title = regex->GetMatch(1);
+              else if (static_cast<size_t>(offset) > nameStart)
+                title = filePath.substr(nameStart, static_cast<size_t>(offset) - nameStart);
               std::string normalizedTitle{StringUtils::ToLower(GetRecursiveTvShowTitle(title))};
               if (!normalizedTitle.empty())
                 ++episodeTitleCounts[normalizedTitle];
@@ -867,17 +874,22 @@ CVideoInfoScanner::~CVideoInfoScanner()
               if (episode == episodes.end())
                 continue;
 
-              const std::string filename{URIUtils::GetFileName(file->GetPath())};
+              const std::string filePath{file->GetPath()};
+              const size_t nameStart{filePath.size() - URIUtils::GetFileName(filePath).size()};
               for (const auto& expression : m_advancedSettings->m_tvshowEnumRegExps)
               {
                 const auto regex{KODI::REGEXP::GetRegExp(
                     expression.regexp, &m_regexpCache, true, CRegExp::autoUtf8)};
                 if (!regex)
                   continue;
-                const int offset{regex->RegFind(filename.c_str())};
+                const int offset{regex->RegFind(filePath.c_str())};
                 if (offset < 0)
                   continue;
-                std::string prefix{filename.substr(0, static_cast<size_t>(offset))};
+                std::string prefix;
+                if (expression.byTitle)
+                  prefix = regex->GetMatch(1);
+                else if (static_cast<size_t>(offset) >= nameStart)
+                  prefix = filePath.substr(nameStart, static_cast<size_t>(offset) - nameStart);
                 StringUtils::Trim(prefix, " ._-");
                 return EpisodeSample{episode->iSeason, std::move(prefix)};
               }
@@ -1379,7 +1391,10 @@ CVideoInfoScanner::~CVideoInfoScanner()
       // necessarily going through DoScan(). Never import Blu-ray/DVD internals
       // as standalone TV shows or episodes in either entry point.
       if (content == ContentType::TVSHOWS &&
-          VIDEO::IsInOpticalDiscStructure(pItem->GetPath()))
+          VIDEO::IsInOpticalDiscStructure(pItem->GetPath()) &&
+          (pItem->IsFolder() ||
+           (!URIUtils::IsOpticalMediaFile(pItem->GetPath()) &&
+            !URIUtils::IsBlurayPath(pItem->GetPath()))))
         continue;
 
       if (pItem->IsFolder() && pItem->GetProperty(PROPERTY_UNCHANGED).asBoolean())
@@ -1412,11 +1427,13 @@ CVideoInfoScanner::~CVideoInfoScanner()
       InfoRet ret = InfoRet::CANCELLED;
       if (info2->Content() == ContentType::TVSHOWS)
       {
-        const int previousShow = pItem->IsFolder() ? GetExactTvShowId(pItem->GetPath()) : -1;
+        // Only delete a record created during this attempt. An unknown path can
+        // reuse an existing metadata-only show via GetMatchingTvShow().
+        pItem->ClearProperty("recursive_tvshow_created_new");
         ret = RetrieveInfoForTvShow(pItem.get(), bDirNames, info2, useLocal, pURL, fetchEpisodes,
                                     pDlgProgress);
-        if (previousShow < 0 && pItem->IsFolder() &&
-            pItem->GetProperty("recursive_tvshow_discovery").asBoolean())
+        if (ret == InfoRet::ADDED && pItem->IsFolder() &&
+            pItem->GetProperty("recursive_tvshow_created_new").asBoolean())
         {
           const int discoveredShow = GetExactTvShowId(pItem->GetPath());
           EpisodeFileMap importedEpisodes;
@@ -2981,9 +2998,13 @@ CVideoInfoScanner::~CVideoInfoScanner()
             m_art.Cache(seasonArtwork);
         }
 
-        lResult = m_database.SetDetailsForTvShow(
-            multipath, movieDetails, art, seasonArt, -1,
-            pItem->GetProperty("recursive_tvshow_discovery").asBoolean());
+        const bool recursiveDiscovery{
+            pItem->GetProperty("recursive_tvshow_discovery").asBoolean()};
+        bool createdNewShow{false};
+        lResult = m_database.SetDetailsForTvShow(multipath, movieDetails, art, seasonArt, -1,
+                                                 recursiveDiscovery, &createdNewShow);
+        if (recursiveDiscovery && createdNewShow && lResult >= 0)
+          pItem->SetProperty("recursive_tvshow_created_new", true);
         movieDetails.m_iDbId = lResult;
         movieDetails.SetMediaType(MEDIA::TYPE::TV_SHOW);
       }
