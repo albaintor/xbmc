@@ -19,6 +19,7 @@
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "video/VideoFileItemClassify.h"
+#include "video/VideoInfoScanner.h"
 #include "video/VideoInfoTag.h"
 #include "video/VideoUtils.h"
 
@@ -197,6 +198,32 @@ TEST(TestVideoFileItemClassify, RecognizeNestedOpticalMediaLikeMovieScanner)
 
   XFILE::CDirectory::RemoveRecursive(discFolder);
   CXBMCTestUtils::Instance().DeleteTempFile(tempFile);
+}
+
+class OpticalDiscScanner : public VIDEO::CVideoInfoScanner
+{
+public:
+  using VIDEO::CVideoInfoScanner::IsOpticalDiscVolume;
+};
+
+TEST(TestVideoFileItemClassify, OpticalDiscVolumesWithReleaseTags)
+{
+  EXPECT_TRUE(OpticalDiscScanner::IsOpticalDiscVolume(
+      "Lady.Oscar.Disc.1.MULTi.COMPLETE.FRA.BLURAY-LEON", "Lady Oscar"));
+  EXPECT_TRUE(OpticalDiscScanner::IsOpticalDiscVolume("Show.Disc.12.1080p.BluRay", "Show"));
+  EXPECT_TRUE(OpticalDiscScanner::IsOpticalDiscVolume("Show.DVD.2.REMASTERED", "Show"));
+  EXPECT_TRUE(OpticalDiscScanner::IsOpticalDiscVolume("Show.D1.MULTi", "Show 1982"));
+  EXPECT_TRUE(OpticalDiscScanner::IsOpticalDiscVolume("Disc 1 COMPLETE UHD", "Any show"));
+  EXPECT_TRUE(OpticalDiscScanner::IsOpticalDiscVolume("Show Disc 1", "Show"));
+}
+
+TEST(TestVideoFileItemClassify, OpticalDiscVolumesRetainShowOwnership)
+{
+  EXPECT_FALSE(OpticalDiscScanner::IsOpticalDiscVolume("Show A.Disc.1.MULTi", "Show B"));
+  EXPECT_FALSE(OpticalDiscScanner::IsOpticalDiscVolume("Show A.Disc.1.MULTi", "Collection"));
+  EXPECT_FALSE(OpticalDiscScanner::IsOpticalDiscVolume("Show.Disc.1.Another.Title", "Show"));
+  EXPECT_FALSE(OpticalDiscScanner::IsOpticalDiscVolume("Show.Disc.1MULTi", "Show"));
+  EXPECT_FALSE(OpticalDiscScanner::IsOpticalDiscVolume("Show.Disc.MULTi", "Show"));
 }
 
 TEST(TestVideoFileItemClassify, IsInOpticalDiscStructure)
