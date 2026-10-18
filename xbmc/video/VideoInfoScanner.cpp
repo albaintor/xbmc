@@ -449,6 +449,19 @@ CVideoInfoScanner::~CVideoInfoScanner()
            StringUtils::EqualsNoCase(prefix, GetRecursiveTvShowTitle(parentName));
   }
 
+  bool CVideoInfoScanner::IsOpticalDiscVolume(const std::string& name,
+                                              const std::string& parentName)
+  {
+    CRegExp disc{
+        true, CRegExp::autoUtf8,
+        R"((?:[ ._-]*(?:disc|disk|dvd|cd|d)[ ._-]*[0-9]+)(?=$|[ ._-]+(?:multi|complete|integrale|remaster(?:ed)?|blu-?ray|uhd|(?:480|576|720|1080|2160)[pi]|vostfr|subfrench|french|fra|vf(?:f|q)?)(?:[ ._-]|$)))"};
+    const int offset{disc.RegFind(name.c_str())};
+    if (offset < 0)
+      return false;
+    const std::string prefix{GetRecursiveTvShowTitle(name.substr(0, offset))};
+    return prefix.empty() || StringUtils::EqualsNoCase(prefix, GetRecursiveTvShowTitle(parentName));
+  }
+
   int CVideoInfoScanner::GetExactTvShowId(const std::string& path)
   {
     // GetTvShowId() deliberately looks at ancestors; this is appropriate for
@@ -677,9 +690,6 @@ CVideoInfoScanner::~CVideoInfoScanner()
         // show instead of incorrectly classifying a genre folder as a show.
         std::vector<CRegExp> stackRegExps{m_advancedSettings->m_folderStackRegExps};
         const std::string currentName{URIUtils::GetFileOrFolderName(strDirectory)};
-        CRegExp discSuffix;
-        const bool validDiscSuffix =
-            discSuffix.RegComp(R"((?:[ ._-]*(?:disc|disk|dvd|cd|d)[ ._-]*[0-9]+)$)");
         bool hasDiscVolumes = false;
         for (const auto& child : items)
         {
@@ -705,15 +715,13 @@ CVideoInfoScanner::~CVideoInfoScanner()
             }
           }
 
-          // Keep support for short volume suffixes like "GAVAN D1", which
-          // are not matched by Kodi's default folder-stacking patterns.
+          // Accept release tags after the volume number while retaining show ownership.
           if (!matchesStack)
           {
-            const int suffixOffset =
-                validDiscSuffix ? discSuffix.RegFind(lowerName.c_str()) : -1;
-            if (suffixOffset < 0)
+            if (!IsOpticalDiscVolume(childName, currentName))
               continue;
-            volumePrefix = childName.substr(0, static_cast<size_t>(suffixOffset));
+            hasDiscVolumes = true;
+            break;
           }
 
           // A grouping directory may contain "Show A DVD 1" and "Show B
@@ -730,9 +738,6 @@ CVideoInfoScanner::~CVideoInfoScanner()
         }
         items.Sort(SortBy::FILE, SortOrder::ASCENDING, SortAttributeNone);
 
-        // Used both while detecting nested season/disc directories and when
-        // marking the discovered show after that detection block.
-        bool hasOpticalSeasonFolders = false;
         if (!foundDirectly)
         {
           // The source root is a collection, not a show. Below the root, the
@@ -953,7 +958,6 @@ CVideoInfoScanner::~CVideoInfoScanner()
                 if (IsOpticalSeasonFolder(folderName, currentName))
                 {
                   hasSeasonSubfolders = true;
-                  hasOpticalSeasonFolders = true;
                   CLog::Log(LOGDEBUG,
                             "VideoInfoScanner: Nested optical-disc season '{}' belongs to '{}'",
                             CURL::GetRedacted(child->GetPath()),
@@ -1038,11 +1042,6 @@ CVideoInfoScanner::~CVideoInfoScanner()
           show->SetPath(strDirectory);
           show->SetFolder(true);
           show->SetProperty("recursive_tvshow_discovery", true);
-          // A recognized optical-disc collection is a real show even when
-          // the disc volume names do not encode episode numbers. Do not
-          // fabricate episode identities from disc/playlist numbering.
-          if (isOpticalDiscRoot || hasDiscVolumes || hasOpticalSeasonFolders)
-            show->SetProperty("recursive_tvshow_optical_media", true);
           items.Add(show);
           items.SetPath(URIUtils::GetParentPath(strDirectory));
           CLog::Log(LOGDEBUG, "VideoInfoScanner: Found recursive TV show '{}'",
@@ -1412,7 +1411,28 @@ CVideoInfoScanner::~CVideoInfoScanner()
 
       InfoRet ret = InfoRet::CANCELLED;
       if (info2->Content() == ContentType::TVSHOWS)
-        ret = RetrieveInfoForTvShow(pItem.get(), bDirNames, info2, useLocal, pURL, fetchEpisodes, pDlgProgress);
+      {
+        const int previousShow = pItem->IsFolder() ? GetExactTvShowId(pItem->GetPath()) : -1;
+        ret = RetrieveInfoForTvShow(pItem.get(), bDirNames, info2, useLocal, pURL, fetchEpisodes,
+                                    pDlgProgress);
+        if (previousShow < 0 && pItem->IsFolder() &&
+            pItem->GetProperty("recursive_tvshow_discovery").asBoolean())
+        {
+          const int discoveredShow = GetExactTvShowId(pItem->GetPath());
+          EpisodeFileMap importedEpisodes;
+          if (discoveredShow >= 0 && m_database.GetEpisodeMap(discoveredShow, importedEpisodes) &&
+              importedEpisodes.empty())
+          {
+            m_database.DeleteTvShow(discoveredShow);
+            m_database.SetPathHash(pItem->GetPath(), "");
+            CLog::Log(LOGDEBUG,
+                      "VideoInfoScanner: No episodes imported for '{}'; discarding new show",
+                      CURL::GetRedacted(pItem->GetPath()));
+            if (ret == InfoRet::ADDED)
+              ret = InfoRet::NOT_NEEDED;
+          }
+        }
+      }
       else if (info2->Content() == ContentType::MOVIES)
         ret = RetrieveInfoForMovie(pItem.get(), bDirNames, info2, useLocal, pURL, pDlgProgress);
       else if (info2->Content() == ContentType::MUSICVIDEOS)
@@ -1556,74 +1576,13 @@ CVideoInfoScanner::~CVideoInfoScanner()
         return InfoRet::HAVE_ALREADY;
       if (epResult == EpisodeResult::NO_MEDIA)
         return InfoRet::NOT_NEEDED;
-      bool hasOpticalMedia = pItem->GetProperty("recursive_tvshow_optical_media").asBoolean();
-      if (!hasOpticalMedia &&
-          pItem->GetProperty("recursive_tvshow_discovery").asBoolean() &&
-          pItem->IsFolder() &&
-          (epResult == EpisodeResult::NO_EPISODES || epResult == EpisodeResult::NO_FILES))
-      {
-        // The refresh job does not preserve transient discovery properties.
-        // Recheck the physical show directory, including season/disc nesting
-        // such as Friends/S1_COMPLETE/S1_D1/BDMV/index.bdmv.
-        hasOpticalMedia = !VIDEO::UTILS::GetOpticalMediaPath(
-                               CFileItem(pItem->GetPath(), true)).empty();
-        if (!hasOpticalMedia)
-        {
-          CFileItemList seasonFolders;
-          if (CDirectory::GetDirectory(
-                  pItem->GetPath(), seasonFolders,
-                  CServiceBroker::GetFileExtensionProvider().GetVideoExtensions(),
-                  DIR_FLAG_NO_FILE_DIRS | DIR_FLAG_NO_FILE_INFO))
-          {
-            for (const auto& season : seasonFolders)
-            {
-              if (!season->IsFolder() || season->IsParentFolder() ||
-                  HasNoMedia(season->GetPath()))
-                continue;
-              if (!VIDEO::UTILS::GetOpticalMediaPath(*season).empty())
-              {
-                hasOpticalMedia = true;
-                break;
-              }
-              CFileItemList volumes;
-              if (!CDirectory::GetDirectory(
-                      season->GetPath(), volumes,
-                      CServiceBroker::GetFileExtensionProvider().GetVideoExtensions(),
-                      DIR_FLAG_NO_FILE_DIRS | DIR_FLAG_NO_FILE_INFO))
-                continue;
-              if (std::ranges::any_of(volumes, [](const auto& volume)
-                                      {
-                                        return volume->IsFolder() && !volume->IsParentFolder() &&
-                                               !VIDEO::UTILS::GetOpticalMediaPath(*volume).empty();
-                                      }))
-              {
-                hasOpticalMedia = true;
-                break;
-              }
-            }
-          }
-        }
-        if (hasOpticalMedia)
-          pItem->SetProperty("recursive_tvshow_optical_media", true);
-      }
       if (epResult == EpisodeResult::NO_EPISODES)
-      {
-        // Disc volume names do not encode episode numbers. Keep show metadata
-        // on an opt-in source even after Refresh all reconstructs its item.
-        // No episode or playlist identities are fabricated.
-        if (!hasOpticalMedia)
-          return InfoRet::NOT_NEEDED;
-        CLog::Log(LOGWARNING,
-                  "VideoInfoScanner: Discovered TV show '{}' with optical discs but no "
-                  "numbered episodes. Importing show metadata only.",
-                  CURL::GetRedacted(pItem->GetPath()));
-      }
+        return InfoRet::NOT_NEEDED;
       // Normal Kodi sources permit metadata-only TV shows. Avoid introducing
       // phantom empty shows from newly discovered recursive directories.
       if (epResult == EpisodeResult::NO_FILES && idTvShow < 0 &&
           pItem->GetProperty("recursive_tvshow_discovery").asBoolean() &&
-          !hasOpticalMedia &&
-          !CFile::Exists(URIUtils::AddFileToFolder(pItem->GetPath(), "tvshow.nfo")))
+          pItem->IsFolder())
       {
         CLog::Log(LOGDEBUG, "VideoInfoScanner: Ignoring empty recursively discovered TV folder '{}'",
                   CURL::GetRedacted(pItem->GetPath()));

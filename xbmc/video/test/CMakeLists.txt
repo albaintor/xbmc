@@ -9,7 +9,6 @@ set(SOURCES TestBookmark.cpp
             TestVideoDbUrl.cpp
             TestVideoFileItemClassify.cpp
             TestVideoInfoTag.cpp
-            TestVideoInfoScanner.cpp
             TestVideoStreamSelect.cpp
             TestVideoTagLoaderNFO.cpp
             TestVideoThumbLoader.cpp

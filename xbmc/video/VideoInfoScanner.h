@@ -147,6 +147,7 @@ namespace KODI::VIDEO
     static std::string GetRecursiveTvShowTitle(const std::string& name,
                                              std::string* year = nullptr);
     static bool IsOpticalSeasonFolder(const std::string& name, const std::string& parentName);
+    static bool IsOpticalDiscVolume(const std::string& name, const std::string& parentName);
 
 
     InfoRet RetrieveInfoForTvShow(CFileItem* pItem,
