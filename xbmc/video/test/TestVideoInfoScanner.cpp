@@ -2139,6 +2139,52 @@ protected:
 };
 } // namespace
 
+TEST_F(TestVideoInfoScannerTvShows, RecursiveSeasonPacksStayInOneShow)
+{
+  ASSERT_TRUE(m_db.ExecuteQuery(m_db.PrepareSQL(
+      "UPDATE path SET scanRecursive=2147483647 WHERE idPath=%i", m_db.GetPathId(m_root))));
+  UseTestScraper();
+  Found("Breaking Bad");
+  Details("Breaking Bad", "<details><title>Breaking Bad</title></details>");
+  const std::string show{Folder(Folder(m_root, "Drama"), "Breaking Bad")};
+  const std::string first{Episode(Folder(show, "Breaking.Bad.S01.1080p.BluRay-GRP"),
+                                  "Breaking.Bad.S01E01.mkv")};
+  const std::string second{Episode(Folder(show, "Breaking.Bad.S02.1080p.BluRay-GRP"),
+                                   "Breaking.Bad.S02E01.mkv")};
+  Scan();
+  EXPECT_EQ(1, CountShows());
+  EXPECT_EQ(2, CountEpisodes());
+  EXPECT_GT(m_db.GetEpisodeId(first, 1, 1), 0);
+  EXPECT_GT(m_db.GetEpisodeId(second, 1, 2), 0);
+}
+
+TEST_F(TestVideoInfoScannerTvShows, RecursiveShowWithNfoAcceptsTitleVariants)
+{
+  ASSERT_TRUE(m_db.ExecuteQuery(m_db.PrepareSQL(
+      "UPDATE path SET scanRecursive=2147483647 WHERE idPath=%i", m_db.GetPathId(m_root))));
+  const std::string show{Show("Grey\'s Anatomy")};
+  Episode(show, "Grey\'s Anatomy - S01E01.mkv");
+  Episode(show, "Greys.Anatomy.S20E01.mkv");
+  Scan();
+  EXPECT_EQ(1, CountShows());
+  EXPECT_EQ(2, CountEpisodes());
+}
+
+TEST_F(TestVideoInfoScannerTvShows, RecursiveOpticalShowSurvivesFullRefresh)
+{
+  ASSERT_TRUE(m_db.ExecuteQuery(m_db.PrepareSQL(
+      "UPDATE path SET scanRecursive=2147483647 WHERE idPath=%i", m_db.GetPathId(m_root))));
+  const std::string show{Show("Friends")};
+  BlurayRip(Folder(show, "Disc 1"));
+  Scan();
+  ASSERT_EQ(1, CountShows());
+  CVideoInfoTag tag;
+  ASSERT_TRUE(m_db.GetTvShowInfo({}, tag, m_db.GetSingleValueInt("SELECT idShow FROM tvshow")));
+  TestRefreshingJob refresh{std::make_shared<CFileItem>(tag), true, true};
+  refresh.Work(m_db);
+  EXPECT_EQ(1, CountShows());
+}
+
 TEST_F(TestVideoInfoScannerTvShows, AShowIsAddedWithItsEpisodes)
 {
   const std::string season{Folder(Show("Show"), "Season 1")};
