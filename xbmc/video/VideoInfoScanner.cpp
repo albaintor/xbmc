@@ -298,38 +298,12 @@ CVideoInfoScanner::~CVideoInfoScanner()
             // Happens mostly for TV Shows that are in the library and were deleted from a sub
             // directory of a defined source.
             size_t missing{0};
-            // Only recursive TV sources need the additional cleanup of their
-            // episode paths. Do not change the cleanup scope of movie or music-video
-            // sources (or the legacy, non-recursive TV scanner).
-            bool cleanRecursiveTvShowPaths = false;
-            if (m_bClean)
-            {
-              SScanSettings scanSettings;
-              bool foundDirectly = false;
-              const ScraperPtr sourceScraper = m_database.GetScraperForPath(
-                  directory, scanSettings, foundDirectly, &m_scraperCache);
-              cleanRecursiveTvShowPaths =
-                  sourceScraper && sourceScraper->Content() == ContentType::TVSHOWS &&
-                  scanSettings.recursive_tvshow_source;
-            }
-
             // Checking each folder is only worth its cost when the count is logged
             const bool countMissing{CServiceBroker::GetLogging().IsLogLevelLogged(LOGDEBUG)};
-            auto f{[this, &missing, countMissing, cleanRecursiveTvShowPaths](const std::string& dir)
+            auto f{[this, &missing, countMissing](const std::string& dir)
                    {
                      if (m_bClean)
-                     {
                        m_pathsToClean.insert(m_database.GetPathId(dir));
-                       // A moved or removed recursive TV show can leave its former
-                       // directory in m_pathsToScan without its season/episode
-                       // directories. Only extend cleanup for opted-in recursive TV
-                       // sources, and only for a show linked to this exact path.
-                       if (cleanRecursiveTvShowPaths)
-                       {
-                         if (const int idShow = GetExactTvShowId(dir); idShow >= 0)
-                           m_database.GetPathsForTvShow(idShow, m_pathsToClean);
-                       }
-                     }
 
                      // CPluginDirectory::Exists always says yes, so treat a plugin path as missing
                      if (!countMissing || (!URIUtils::IsPlugin(dir) && CDirectory::Exists(dir)))
@@ -518,6 +492,447 @@ CVideoInfoScanner::~CVideoInfoScanner()
     listing->Copy(items);
     m_recursiveTvListings.emplace(std::move(key), std::move(listing));
     return true;
+  }
+
+  bool CVideoInfoScanner::HasExplicitTvShowNfo(const std::string& directory,
+                                               const CFileItemList& items)
+  {
+    return std::ranges::any_of(items, [](const auto& item)
+                              {
+                                return !item->IsFolder() &&
+                                       StringUtils::EqualsNoCase(
+                                           URIUtils::GetFileName(item->GetPath()), "tvshow.nfo");
+                              }) ||
+           CFile::Exists(URIUtils::AddFileToFolder(directory, "tvshow.nfo"));
+  }
+
+  bool CVideoInfoScanner::IsStandardTvSeason(const std::string& name)
+  {
+    const auto season = KODI::REGEXP::GetRegExp(
+        "^(?:season[ ._-]*[0-9]+|specials)$", &m_regexpCache, true, CRegExp::autoUtf8);
+    return season && season->RegFind(name) >= 0;
+  }
+
+  CVideoInfoScanner::TvShowDiscovery CVideoInfoScanner::FindShowFolder(
+      const std::string& strDirectory,
+      const CFileItemList& items,
+      const std::vector<std::string>& regexps,
+      bool foundDirectly)
+  {
+    if (foundDirectly)
+      return TvShowDiscovery::Grouping;
+
+    const bool hasNfo = HasExplicitTvShowNfo(strDirectory, items);
+    if (hasNfo)
+      return TvShowDiscovery::Show;
+
+    // A conventional season directory is a strong show-root marker. If the root
+    // also contains videos, retain the media checks for mixed-series ambiguity.
+    const bool hasDirectVideos = std::ranges::any_of(
+        items, [](const auto& item) { return !item->IsFolder() && VIDEO::IsVideo(*item); });
+    const bool hasStandardSeason = std::ranges::any_of(
+        items,
+        [this, &regexps](const auto& child)
+        {
+          return child->IsFolder() && !child->IsParentFolder() &&
+                 IsStandardTvSeason(URIUtils::GetFileOrFolderName(child->GetPath())) &&
+                 !CUtil::ExcludeFileOrFolder(child->GetPath(), regexps, &m_regexpCache) &&
+                 !HasNoMedia(child->GetPath());
+        });
+    if (hasStandardSeason && !hasDirectVideos)
+      return TvShowDiscovery::Show;
+
+    return FindShowFolderByMedia(strDirectory, items, regexps, hasStandardSeason);
+  }
+
+  CVideoInfoScanner::TvShowDiscovery CVideoInfoScanner::FindShowFolderByMedia(
+      const std::string& strDirectory,
+      const CFileItemList& items,
+      const std::vector<std::string>& regexps,
+      bool hasStandardSeason)
+  {
+    // Recognise playable disc entry points using the same native helper as
+    // the movie scanner. Do NOT Stack() an intermediate grouping listing:
+    // converting child disc folders into file items would prevent DoScan()
+    // from descending to the proper TV show directory.
+    std::map<std::string, bool> opticalFolders;
+    const auto hasOpticalMedia = [&opticalFolders](const CFileItem& folder)
+    {
+      const auto [entry, inserted] = opticalFolders.try_emplace(folder.GetPath(), false);
+      if (inserted)
+        entry->second = !VIDEO::UTILS::GetOpticalMediaPath(folder).empty();
+      return entry->second;
+    };
+    const CFileItem currentFolder(strDirectory, true);
+    const bool isOpticalDiscRoot = hasOpticalMedia(currentFolder);
+
+    // Disc-volume subfolders (Disc 1, DVD 2, etc.) are identified with the
+    // existing configurable Kodi folder-stacking expressions. Also accept
+    // title-prefixed short volume names such as GAVAN D1 and GAVAN D2.
+    // Unlike a generic disc child this associates volumes with their parent
+    // show instead of incorrectly classifying a genre folder as a show.
+    std::vector<CRegExp> stackRegExps{m_advancedSettings->m_folderStackRegExps};
+    const std::string currentName{URIUtils::GetFileOrFolderName(strDirectory)};
+    bool hasDiscVolumes = false;
+    for (const auto& child : items)
+    {
+      if (!child->IsFolder() || child->IsParentFolder() ||
+          CUtil::ExcludeFileOrFolder(child->GetPath(), regexps, &m_regexpCache))
+        continue;
+
+      const std::string childName{URIUtils::GetFileOrFolderName(child->GetPath())};
+      const std::string lowerName{StringUtils::ToLower(childName)};
+      // Kodi's folder-stacking patterns capture the show prefix in group
+      // 1 and the disc/part number in group 2. An empty group 1 (e.g.
+      // "Part 1") identifies a generic volume belonging to this show.
+      std::string volumePrefix;
+      bool matchesStack = false;
+      for (auto& re : stackRegExps)
+      {
+        if (re.RegFind(lowerName) >= 0 && re.GetSubCount() >= 2)
+        {
+          volumePrefix = re.GetMatch(1);
+          matchesStack = true;
+          break;
+        }
+      }
+
+      // Accept release tags after the volume number while retaining show ownership.
+      if (!matchesStack)
+      {
+        if (!IsOpticalDiscVolume(childName, currentName) || !hasOpticalMedia(*child))
+          continue;
+        hasDiscVolumes = true;
+        break;
+      }
+
+      // A grouping directory may contain "Show A DVD 1" and "Show B
+      // DVD 1". Only generic volume names or volume names whose captured
+      // prefix matches the candidate show may promote it to a show root.
+      StringUtils::Trim(volumePrefix, " ._-");
+      if ((volumePrefix.empty() ||
+           StringUtils::EqualsNoCase(GetRecursiveTvShowTitle(volumePrefix),
+                                     GetRecursiveTvShowTitle(currentName))) &&
+          hasOpticalMedia(*child))
+      {
+        hasDiscVolumes = true;
+        break;
+      }
+    }
+
+    bool hasOpticalSeasonSubfolders = false;
+    bool recursiveTvShowRoot = false;
+    {
+      // The source root is a collection, not a show. Below the root, the
+      // first directory holding actual videos, tvshow.nfo, or an exact
+      // previously indexed TV show path becomes the show root.
+      // In particular, no season-directory naming convention is required.
+      // A random video file is not sufficient evidence of a TV series:
+      // folders containing films and OAVs are common inside franchises.
+      // Only accept an episode matched by Kodi's existing naming rules.
+      // Also detect media belonging to different series in the *same*
+      // folder before passing the entire folder to EnumerateSeriesFolder(),
+      // which assumes that every episode it receives belongs to one show.
+      std::map<std::string, unsigned int> episodeTitleCounts;
+      unsigned int numberedEpisodes = 0;
+      for (const auto& file : items)
+      {
+        if (file->IsFolder() || !VIDEO::IsVideo(*file) ||
+            URIUtils::HasExtension(file->GetPath(), ".mpls") ||
+            (VIDEO::IsInOpticalDiscStructure(file->GetPath()) &&
+             !URIUtils::IsOpticalMediaFile(file->GetPath())) ||
+            CUtil::ExcludeFileOrFolder(file->GetPath(), regexps, &m_regexpCache))
+          continue;
+
+        EPISODELIST episodes;
+        if (!CEpisodeUtils::EnumerateEpisodeItem(file.get(), episodes, &m_regexpCache) ||
+            std::ranges::none_of(
+                episodes, [](const auto& episode)
+                {
+                  return (episode.iSeason >= 0 && episode.iEpisode >= 0) ||
+                         episode.cDate.IsValid() || !episode.strTitle.empty();
+                }))
+          continue;
+        ++numberedEpisodes;
+
+        // The default by-title expression requires the directory separator.
+        // Match against the same complete path as EnumerateEpisodeItem().
+        const std::string filePath{file->GetPath()};
+        const size_t nameStart{filePath.size() - URIUtils::GetFileName(filePath).size()};
+        for (const auto& expression : m_advancedSettings->m_tvshowEnumRegExps)
+        {
+          const auto regex{KODI::REGEXP::GetRegExp(
+              expression.regexp, &m_regexpCache, true, CRegExp::autoUtf8)};
+          if (!regex)
+            continue;
+
+          const int offset{regex->RegFind(filePath.c_str())};
+          if (offset < 0)
+            continue;
+
+          std::string title;
+          if (expression.byTitle)
+            title = regex->GetMatch(1);
+          else if (static_cast<size_t>(offset) > nameStart)
+            title = filePath.substr(nameStart, static_cast<size_t>(offset) - nameStart);
+          std::string normalizedTitle{StringUtils::ToLower(GetRecursiveTvShowTitle(title))};
+          StringUtils::Replace(normalizedTitle, "'", "");
+          StringUtils::Replace(normalizedTitle, "’", "");
+          if (!normalizedTitle.empty())
+            ++episodeTitleCounts[normalizedTitle];
+          break;
+        }
+      }
+
+      // Ignore a single weak numeric-only match in an unnumbered movie
+      // directory, unless a user explicitly identifies the series by NFO.
+      std::string normalizedFolderTitle{StringUtils::ToLower(
+          GetRecursiveTvShowTitle(URIUtils::GetFileOrFolderName(strDirectory)))};
+      StringUtils::Replace(normalizedFolderTitle, "'", "");
+      StringUtils::Replace(normalizedFolderTitle, "’", "");
+
+      // A single file with a weak numeric match (e.g. a movie named
+      // "Dragon Ball GT 100 ans") must not turn an unrelated directory
+      // into a series. Single-episode shows require matching filename
+      // and folder titles, or explicit metadata.
+      const bool hasVideo =
+          numberedEpisodes >= 2 ||
+          (numberedEpisodes == 1 && episodeTitleCounts.contains(normalizedFolderTitle));
+      // Even one episode from each of two different shows is ambiguous.
+      // Counting only titles with multiple files would silently merge
+      // "Show A S01E01" and "Show B S01E02" into a single TV show.
+      const bool isKnownShow = GetExactTvShowId(strDirectory) >= 0;
+      const bool hasMixedSeries = episodeTitleCounts.size() > 1 && !isKnownShow;
+      if (hasMixedSeries)
+      {
+        CLog::Log(LOGERROR,
+                  "VideoInfoScanner: Recursive TV folder '{}' contains episodes of {} "
+                  "different series. Split them into separate series directories; "
+                  "skipping this folder instead of merging episodes.",
+                  CURL::GetRedacted(strDirectory), episodeTitleCounts.size());
+        // This directory cannot be scanned safely as a single TV show.
+        // Continue scanning unrelated folders, but suppress automatic
+        // cleanup for this run to preserve any previously indexed entries
+        // in the ambiguous subtree until the user reorganizes its files.
+        RemoveSubDirectories(m_pathsToScan, strDirectory, {});
+        if (m_bClean)
+        {
+          CLog::Log(LOGWARNING,
+                    "VideoInfoScanner: Disabling automatic library cleanup for this "
+                    "scan because '{}' contains episodes from multiple series",
+                    CURL::GetRedacted(strDirectory));
+          m_bClean = false;
+        }
+        return TvShowDiscovery::Ambiguous;
+      }
+
+      // Discover episode-bearing folders from their media upwards rather
+      // than assigning the first media-containing *descendant* to a show.
+      // This keeps a franchise (Dragon Ball) distinct from sibling shows
+      // (Dragon Ball / Dragon Ball Z) and handles one or more season folders
+      // beneath a show (Nicky Larson/Saison 1/City Hunter S01E01.mp4).
+      struct EpisodeSample
+      {
+        int season{-1};
+        std::string showPrefix;
+      };
+      const auto sampleFromFiles = [this, &regexps](const CFileItemList& candidates)
+          -> std::optional<EpisodeSample>
+      {
+        for (const auto& file : candidates)
+        {
+          if (file->IsFolder() || !VIDEO::IsVideo(*file) ||
+              VIDEO::IsInOpticalDiscStructure(file->GetPath()) ||
+              CUtil::ExcludeFileOrFolder(file->GetPath(), regexps, &m_regexpCache))
+            continue;
+
+          EPISODELIST episodes;
+          if (!CEpisodeUtils::EnumerateEpisodeItem(file.get(), episodes, &m_regexpCache))
+            continue;
+
+          const auto episode = std::ranges::find_if(
+              episodes, [](const auto& e)
+              {
+                return (e.iSeason >= 0 && e.iEpisode >= 0) || e.cDate.IsValid() ||
+                       !e.strTitle.empty();
+              });
+          if (episode == episodes.end())
+            continue;
+
+          const std::string filePath{file->GetPath()};
+          const size_t nameStart{filePath.size() - URIUtils::GetFileName(filePath).size()};
+          for (const auto& expression : m_advancedSettings->m_tvshowEnumRegExps)
+          {
+            const auto regex{KODI::REGEXP::GetRegExp(
+                expression.regexp, &m_regexpCache, true, CRegExp::autoUtf8)};
+            if (!regex)
+              continue;
+            const int offset{regex->RegFind(filePath.c_str())};
+            if (offset < 0)
+              continue;
+            std::string prefix;
+            if (expression.byTitle)
+              prefix = regex->GetMatch(1);
+            else if (static_cast<size_t>(offset) >= nameStart)
+              prefix = filePath.substr(nameStart, static_cast<size_t>(offset) - nameStart);
+            StringUtils::Trim(prefix, " ._-");
+            return EpisodeSample{episode->iSeason, std::move(prefix)};
+          }
+        }
+        return std::nullopt;
+      };
+
+      // Inspect direct children and one more level for their episode
+      // evidence. A sibling series may store all videos under "Saison 1",
+      // while a season folder itself directly contains its video files.
+      bool hasSeasonSubfolders = false;
+      unsigned int independentShowChildren = 0;
+      std::string currentYear;
+      const std::string currentTitle{GetRecursiveTvShowTitle(currentName, &currentYear)};
+      std::set<std::string> seasonPackYears;
+      if (!hasVideo && !isOpticalDiscRoot && !hasDiscVolumes)
+      {
+        for (const auto& child : items)
+        {
+          if (!child->IsFolder() || child->IsParentFolder() ||
+              HasNoMedia(child->GetPath()) ||
+              CUtil::ExcludeFileOrFolder(child->GetPath(), regexps, &m_regexpCache) ||
+              VIDEO::IsInOpticalDiscStructure(child->GetPath()))
+            continue;
+
+          CFileItemList childItems;
+          if (!ListRecursiveTvFolder(child->GetPath(), childItems))
+          {
+            CLog::Log(LOGWARNING,
+                      "VideoInfoScanner: Cannot inspect TV folder '{}'; skipping subtree "
+                      "and disabling cleanup for this scan",
+                      CURL::GetRedacted(child->GetPath()));
+            m_bClean = false;
+            std::string failedPath{child->GetPath()};
+            URIUtils::AddSlashAtEnd(failedPath);
+            RemoveSubDirectories(m_pathsToScan, failedPath, {});
+            continue;
+          }
+
+          const auto sample{sampleFromFiles(childItems)};
+          const std::string childName{URIUtils::GetFileOrFolderName(child->GetPath())};
+          std::string childYear;
+          const std::string childTitle{GetRecursiveTvShowTitle(childName, &childYear)};
+          // A season pack may include a year omitted by the show folder.
+          const bool seasonPack = IsOpticalSeasonFolder(childName, currentName);
+          const bool seasonPackWithYear =
+              seasonPack && currentYear.empty() && !childYear.empty();
+          const bool sameTitle = StringUtils::EqualsNoCase(childTitle, currentTitle);
+          const bool sameTitleOtherYear = sameTitle && !childYear.empty() &&
+                                          childYear != currentYear && !seasonPackWithYear;
+          const bool namedAfterItsShow =
+              sample && !sample->showPrefix.empty() && !seasonPack && !sameTitle &&
+              StringUtils::EqualsNoCase(childTitle,
+                                        GetRecursiveTvShowTitle(sample->showPrefix));
+          const bool matchesParentShow =
+              sample && !sample->showPrefix.empty() && !sameTitleOtherYear &&
+              !namedAfterItsShow && !StringUtils::EqualsNoCase(childName, currentName) &&
+              StringUtils::EqualsNoCase(GetRecursiveTvShowTitle(sample->showPrefix),
+                                        currentTitle);
+          if (sample && !sameTitleOtherYear && !namedAfterItsShow &&
+              (IsLikelySeasonFolder(child->GetPath(), sample->season, sample->showPrefix) ||
+               matchesParentShow))
+          {
+            hasSeasonSubfolders = true;
+            if (seasonPackWithYear)
+              seasonPackYears.insert(childYear);
+            continue;
+          }
+
+          // A season can contain optical disc volumes rather than
+          // individual episode files. For instance:
+          // FRIENDS/FRIENDS_S1_COMPLETE_UHD/FRIENDS_S1_D1/BDMV/index.bdmv.
+          // Kodi's normal episode regexps cannot identify a season folder
+          // solely by scanning BDMV entry points, so use the language-
+          // independent "S1" / "S01" token as a hint for this case only.
+          // It is not a requirement for ordinary video episode folders.
+          if (seasonPack && !sameTitleOtherYear)
+          {
+            if (std::ranges::any_of(childItems, [&hasOpticalMedia](const auto& volume)
+                { return volume->IsFolder() && !volume->IsParentFolder() &&
+                         hasOpticalMedia(*volume); }))
+            {
+              hasSeasonSubfolders = true;
+              hasOpticalSeasonSubfolders = true;
+              if (seasonPackWithYear)
+                seasonPackYears.insert(childYear);
+              CLog::Log(LOGDEBUG,
+                        "VideoInfoScanner: Nested optical-disc season '{}' belongs to '{}'",
+                        CURL::GetRedacted(child->GetPath()),
+                        CURL::GetRedacted(strDirectory));
+              continue;
+            }
+          }
+
+          // The child contains its own show media, or is a show with its
+          // own season folders. In either case it is not a season folder
+          // of the current directory.
+          bool childIsShow = sample.has_value() || hasOpticalMedia(*child);
+          for (const auto& grandchild : childItems)
+          {
+            if (childIsShow)
+              break;
+            if (!grandchild->IsFolder() || grandchild->IsParentFolder() ||
+                HasNoMedia(grandchild->GetPath()) ||
+                CUtil::ExcludeFileOrFolder(grandchild->GetPath(), regexps, &m_regexpCache) ||
+                VIDEO::IsInOpticalDiscStructure(grandchild->GetPath()))
+              continue;
+
+            if (hasOpticalMedia(*grandchild))
+            {
+              childIsShow = true;
+              break;
+            }
+            CFileItemList grandchildren;
+            if (!ListRecursiveTvFolder(grandchild->GetPath(), grandchildren))
+            {
+              CLog::Log(LOGWARNING,
+                        "VideoInfoScanner: Cannot inspect TV subfolder '{}'; skipping "
+                        "subtree and disabling cleanup for this scan",
+                        CURL::GetRedacted(grandchild->GetPath()));
+              m_bClean = false;
+              std::string failedPath{grandchild->GetPath()};
+              URIUtils::AddSlashAtEnd(failedPath);
+              RemoveSubDirectories(m_pathsToScan, failedPath, {});
+              continue;
+            }
+            if (sampleFromFiles(grandchildren))
+            {
+              childIsShow = true;
+              break;
+            }
+          }
+
+          if (childIsShow)
+            ++independentShowChildren;
+        }
+      }
+
+      // Independent show folders remain distinct even if their titles match.
+      const bool isFranchiseGrouping =
+          independentShowChildren >= 2 || seasonPackYears.size() > 1;
+      if (isFranchiseGrouping)
+        CLog::Log(LOGDEBUG,
+                  "VideoInfoScanner: '{}' contains independent TV show folders or season packs "
+                  "with different years",
+                  CURL::GetRedacted(strDirectory));
+
+      // Optical discs count as media even without an MKV/MP4 file.
+      recursiveTvShowRoot =
+          !isFranchiseGrouping &&
+          (hasVideo || isOpticalDiscRoot || hasDiscVolumes || hasStandardSeason || isKnownShow ||
+           (hasSeasonSubfolders && independentShowChildren == 0));
+    }
+    if (!recursiveTvShowRoot)
+      return TvShowDiscovery::Grouping;
+    return isOpticalDiscRoot || hasDiscVolumes || hasOpticalSeasonSubfolders
+               ? TvShowDiscovery::OpticalShow
+               : TvShowDiscovery::Show;
   }
 
   std::pair<CInfoScanner::ScanComplete, CInfoScanner::ContentFound> CVideoInfoScanner::DoScan(
@@ -745,386 +1160,11 @@ CVideoInfoScanner::~CVideoInfoScanner()
         NoteListed(items);
         items.SetPath(strDirectory);
 
-        // Recognise playable disc entry points using the same native helper as
-        // the movie scanner. Do NOT Stack() an intermediate grouping listing:
-        // converting child disc folders into file items would prevent DoScan()
-        // from descending to the proper TV show directory.
-        std::map<std::string, bool> opticalFolders;
-        const auto hasOpticalMedia = [&opticalFolders](const CFileItem& folder)
-        {
-          const auto [entry, inserted] = opticalFolders.try_emplace(folder.GetPath(), false);
-          if (inserted)
-            entry->second = !VIDEO::UTILS::GetOpticalMediaPath(folder).empty();
-          return entry->second;
-        };
-        const CFileItem currentFolder(strDirectory, true);
-        const bool isOpticalDiscRoot = !foundDirectly && hasOpticalMedia(currentFolder);
-
-        // Disc-volume subfolders (Disc 1, DVD 2, etc.) are identified with the
-        // existing configurable Kodi folder-stacking expressions. Also accept
-        // title-prefixed short volume names such as GAVAN D1 and GAVAN D2.
-        // Unlike a generic disc child this associates volumes with their parent
-        // show instead of incorrectly classifying a genre folder as a show.
-        std::vector<CRegExp> stackRegExps{m_advancedSettings->m_folderStackRegExps};
-        const std::string currentName{URIUtils::GetFileOrFolderName(strDirectory)};
-        bool hasDiscVolumes = false;
-        for (const auto& child : items)
-        {
-          if (foundDirectly || !child->IsFolder() || child->IsParentFolder() ||
-              CUtil::ExcludeFileOrFolder(child->GetPath(), regexps, &m_regexpCache))
-            continue;
-
-          const std::string childName{URIUtils::GetFileOrFolderName(child->GetPath())};
-          const std::string lowerName{StringUtils::ToLower(childName)};
-          // Kodi's folder-stacking patterns capture the show prefix in group
-          // 1 and the disc/part number in group 2. An empty group 1 (e.g.
-          // "Part 1") identifies a generic volume belonging to this show.
-          std::string volumePrefix;
-          bool matchesStack = false;
-          for (auto& re : stackRegExps)
-          {
-            if (re.RegFind(lowerName) >= 0 && re.GetSubCount() >= 2)
-            {
-              volumePrefix = re.GetMatch(1);
-              matchesStack = true;
-              break;
-            }
-          }
-
-          // Accept release tags after the volume number while retaining show ownership.
-          if (!matchesStack)
-          {
-            if (!IsOpticalDiscVolume(childName, currentName) || !hasOpticalMedia(*child))
-              continue;
-            hasDiscVolumes = true;
-            break;
-          }
-
-          // A grouping directory may contain "Show A DVD 1" and "Show B
-          // DVD 1". Only generic volume names or volume names whose captured
-          // prefix matches the candidate show may promote it to a show root.
-          StringUtils::Trim(volumePrefix, " ._-");
-          if ((volumePrefix.empty() ||
-               StringUtils::EqualsNoCase(GetRecursiveTvShowTitle(volumePrefix),
-                                         GetRecursiveTvShowTitle(currentName))) &&
-              hasOpticalMedia(*child))
-          {
-            hasDiscVolumes = true;
-            break;
-          }
-        }
         items.Sort(SortBy::FILE, SortOrder::ASCENDING, SortAttributeNone);
-
-        // Keep optical season evidence available when constructing the show item.
-        bool hasOpticalSeasonSubfolders = false;
-        if (!foundDirectly)
-        {
-          // The source root is a collection, not a show. Below the root, the
-          // first directory holding actual videos, tvshow.nfo, or an exact
-          // previously indexed TV show path becomes the show root.
-          // In particular, no season-directory naming convention is required.
-          // A random video file is not sufficient evidence of a TV series:
-          // folders containing films and OAVs are common inside franchises.
-          // Only accept an episode matched by Kodi's existing naming rules.
-          // Also detect media belonging to different series in the *same*
-          // folder before passing the entire folder to EnumerateSeriesFolder(),
-          // which assumes that every episode it receives belongs to one show.
-          std::map<std::string, unsigned int> episodeTitleCounts;
-          unsigned int numberedEpisodes = 0;
-          for (const auto& file : items)
-          {
-            if (file->IsFolder() || !VIDEO::IsVideo(*file) ||
-                URIUtils::HasExtension(file->GetPath(), ".mpls") ||
-                (VIDEO::IsInOpticalDiscStructure(file->GetPath()) &&
-                 !URIUtils::IsOpticalMediaFile(file->GetPath())) ||
-                CUtil::ExcludeFileOrFolder(file->GetPath(), regexps, &m_regexpCache))
-              continue;
-
-            EPISODELIST episodes;
-            if (!CEpisodeUtils::EnumerateEpisodeItem(file.get(), episodes, &m_regexpCache) ||
-                std::ranges::none_of(
-                    episodes, [](const auto& episode)
-                    {
-                      return (episode.iSeason >= 0 && episode.iEpisode >= 0) ||
-                             episode.cDate.IsValid() || !episode.strTitle.empty();
-                    }))
-              continue;
-            ++numberedEpisodes;
-
-            // The default by-title expression requires the directory separator.
-            // Match against the same complete path as EnumerateEpisodeItem().
-            const std::string filePath{file->GetPath()};
-            const size_t nameStart{filePath.size() - URIUtils::GetFileName(filePath).size()};
-            for (const auto& expression : m_advancedSettings->m_tvshowEnumRegExps)
-            {
-              const auto regex{KODI::REGEXP::GetRegExp(
-                  expression.regexp, &m_regexpCache, true, CRegExp::autoUtf8)};
-              if (!regex)
-                continue;
-
-              const int offset{regex->RegFind(filePath.c_str())};
-              if (offset < 0)
-                continue;
-
-              std::string title;
-              if (expression.byTitle)
-                title = regex->GetMatch(1);
-              else if (static_cast<size_t>(offset) > nameStart)
-                title = filePath.substr(nameStart, static_cast<size_t>(offset) - nameStart);
-              std::string normalizedTitle{StringUtils::ToLower(GetRecursiveTvShowTitle(title))};
-              StringUtils::Replace(normalizedTitle, "'", "");
-              StringUtils::Replace(normalizedTitle, "’", "");
-              if (!normalizedTitle.empty())
-                ++episodeTitleCounts[normalizedTitle];
-              break;
-            }
-          }
-
-          // Ignore a single weak numeric-only match in an unnumbered movie
-          // directory, unless a user explicitly identifies the series by NFO.
-          std::string normalizedFolderTitle{StringUtils::ToLower(
-              GetRecursiveTvShowTitle(URIUtils::GetFileOrFolderName(strDirectory)))};
-          StringUtils::Replace(normalizedFolderTitle, "'", "");
-          StringUtils::Replace(normalizedFolderTitle, "’", "");
-
-          // A single file with a weak numeric match (e.g. a movie named
-          // "Dragon Ball GT 100 ans") must not turn an unrelated directory
-          // into a series. Single-episode shows require matching filename
-          // and folder titles, or explicit metadata.
-          const bool hasVideo =
-              numberedEpisodes >= 2 ||
-              (numberedEpisodes == 1 && episodeTitleCounts.contains(normalizedFolderTitle));
-          // Even one episode from each of two different shows is ambiguous.
-          // Counting only titles with multiple files would silently merge
-          // "Show A S01E01" and "Show B S01E02" into a single TV show.
-          const bool hasNfo = CFile::Exists(URIUtils::AddFileToFolder(strDirectory, "tvshow.nfo"));
-          const bool isKnownShow = GetExactTvShowId(strDirectory) >= 0;
-          const bool hasMixedSeries = episodeTitleCounts.size() > 1 && !hasNfo && !isKnownShow;
-          if (hasMixedSeries)
-          {
-            CLog::Log(LOGERROR,
-                      "VideoInfoScanner: Recursive TV folder '{}' contains episodes of {} "
-                      "different series. Split them into separate series directories; "
-                      "skipping this folder instead of merging episodes.",
-                      CURL::GetRedacted(strDirectory), episodeTitleCounts.size());
-            // This directory cannot be scanned safely as a single TV show.
-            // Continue scanning unrelated folders, but suppress automatic
-            // cleanup for this run to preserve any previously indexed entries
-            // in the ambiguous subtree until the user reorganizes its files.
-            RemoveSubDirectories(m_pathsToScan, strDirectory, {});
-            if (m_bClean)
-            {
-              CLog::Log(LOGWARNING,
-                        "VideoInfoScanner: Disabling automatic library cleanup for this "
-                        "scan because '{}' contains episodes from multiple series",
-                        CURL::GetRedacted(strDirectory));
-              m_bClean = false;
-            }
-            return std::make_pair(ScanComplete::Completed, ContentFound::None);
-          }
-
-          // Discover episode-bearing folders from their media upwards rather
-          // than assigning the first media-containing *descendant* to a show.
-          // This keeps a franchise (Dragon Ball) distinct from sibling shows
-          // (Dragon Ball / Dragon Ball Z) and handles one or more season folders
-          // beneath a show (Nicky Larson/Saison 1/City Hunter S01E01.mp4).
-          struct EpisodeSample
-          {
-            int season{-1};
-            std::string showPrefix;
-          };
-          const auto sampleFromFiles = [this, &regexps](const CFileItemList& candidates)
-              -> std::optional<EpisodeSample>
-          {
-            for (const auto& file : candidates)
-            {
-              if (file->IsFolder() || !VIDEO::IsVideo(*file) ||
-                  VIDEO::IsInOpticalDiscStructure(file->GetPath()) ||
-                  CUtil::ExcludeFileOrFolder(file->GetPath(), regexps, &m_regexpCache))
-                continue;
-
-              EPISODELIST episodes;
-              if (!CEpisodeUtils::EnumerateEpisodeItem(file.get(), episodes, &m_regexpCache))
-                continue;
-
-              const auto episode = std::ranges::find_if(
-                  episodes, [](const auto& e)
-                  {
-                    return (e.iSeason >= 0 && e.iEpisode >= 0) || e.cDate.IsValid() ||
-                           !e.strTitle.empty();
-                  });
-              if (episode == episodes.end())
-                continue;
-
-              const std::string filePath{file->GetPath()};
-              const size_t nameStart{filePath.size() - URIUtils::GetFileName(filePath).size()};
-              for (const auto& expression : m_advancedSettings->m_tvshowEnumRegExps)
-              {
-                const auto regex{KODI::REGEXP::GetRegExp(
-                    expression.regexp, &m_regexpCache, true, CRegExp::autoUtf8)};
-                if (!regex)
-                  continue;
-                const int offset{regex->RegFind(filePath.c_str())};
-                if (offset < 0)
-                  continue;
-                std::string prefix;
-                if (expression.byTitle)
-                  prefix = regex->GetMatch(1);
-                else if (static_cast<size_t>(offset) >= nameStart)
-                  prefix = filePath.substr(nameStart, static_cast<size_t>(offset) - nameStart);
-                StringUtils::Trim(prefix, " ._-");
-                return EpisodeSample{episode->iSeason, std::move(prefix)};
-              }
-            }
-            return std::nullopt;
-          };
-
-          // Inspect direct children and one more level for their episode
-          // evidence. A sibling series may store all videos under "Saison 1",
-          // while a season folder itself directly contains its video files.
-          bool hasSeasonSubfolders = false;
-          unsigned int independentShowChildren = 0;
-          std::string currentYear;
-          const std::string currentTitle{GetRecursiveTvShowTitle(currentName, &currentYear)};
-          std::set<std::string> seasonPackYears;
-          if (!hasVideo && !isOpticalDiscRoot && !hasDiscVolumes && !hasNfo)
-          {
-            for (const auto& child : items)
-            {
-              if (!child->IsFolder() || child->IsParentFolder() ||
-                  HasNoMedia(child->GetPath()) ||
-                  CUtil::ExcludeFileOrFolder(child->GetPath(), regexps, &m_regexpCache) ||
-                  VIDEO::IsInOpticalDiscStructure(child->GetPath()))
-                continue;
-
-              CFileItemList childItems;
-              if (!ListRecursiveTvFolder(child->GetPath(), childItems))
-              {
-                CLog::Log(LOGWARNING,
-                          "VideoInfoScanner: Cannot inspect TV folder '{}'; skipping subtree "
-                          "and disabling cleanup for this scan",
-                          CURL::GetRedacted(child->GetPath()));
-                m_bClean = false;
-                std::string failedPath{child->GetPath()};
-                URIUtils::AddSlashAtEnd(failedPath);
-                RemoveSubDirectories(m_pathsToScan, failedPath, {});
-                continue;
-              }
-
-              const auto sample{sampleFromFiles(childItems)};
-              const std::string childName{URIUtils::GetFileOrFolderName(child->GetPath())};
-              std::string childYear;
-              const std::string childTitle{GetRecursiveTvShowTitle(childName, &childYear)};
-              // A season pack may include a year omitted by the show folder.
-              const bool seasonPack = IsOpticalSeasonFolder(childName, currentName);
-              const bool seasonPackWithYear =
-                  seasonPack && currentYear.empty() && !childYear.empty();
-              const bool sameTitle = StringUtils::EqualsNoCase(childTitle, currentTitle);
-              const bool sameTitleOtherYear = sameTitle && !childYear.empty() &&
-                                              childYear != currentYear && !seasonPackWithYear;
-              const bool namedAfterItsShow =
-                  sample && !sample->showPrefix.empty() && !seasonPack && !sameTitle &&
-                  StringUtils::EqualsNoCase(childTitle,
-                                            GetRecursiveTvShowTitle(sample->showPrefix));
-              const bool matchesParentShow =
-                  sample && !sample->showPrefix.empty() && !sameTitleOtherYear &&
-                  !namedAfterItsShow && !StringUtils::EqualsNoCase(childName, currentName) &&
-                  StringUtils::EqualsNoCase(GetRecursiveTvShowTitle(sample->showPrefix),
-                                            currentTitle);
-              if (sample && !sameTitleOtherYear && !namedAfterItsShow &&
-                  (IsLikelySeasonFolder(child->GetPath(), sample->season, sample->showPrefix) ||
-                   matchesParentShow))
-              {
-                hasSeasonSubfolders = true;
-                if (seasonPackWithYear)
-                  seasonPackYears.insert(childYear);
-                continue;
-              }
-
-              // A season can contain optical disc volumes rather than
-              // individual episode files. For instance:
-              // FRIENDS/FRIENDS_S1_COMPLETE_UHD/FRIENDS_S1_D1/BDMV/index.bdmv.
-              // Kodi's normal episode regexps cannot identify a season folder
-              // solely by scanning BDMV entry points, so use the language-
-              // independent "S1" / "S01" token as a hint for this case only.
-              // It is not a requirement for ordinary video episode folders.
-              if (seasonPack && !sameTitleOtherYear)
-              {
-                if (std::ranges::any_of(childItems, [&hasOpticalMedia](const auto& volume)
-                    { return volume->IsFolder() && !volume->IsParentFolder() &&
-                             hasOpticalMedia(*volume); }))
-                {
-                  hasSeasonSubfolders = true;
-                  hasOpticalSeasonSubfolders = true;
-                  if (seasonPackWithYear)
-                    seasonPackYears.insert(childYear);
-                  CLog::Log(LOGDEBUG,
-                            "VideoInfoScanner: Nested optical-disc season '{}' belongs to '{}'",
-                            CURL::GetRedacted(child->GetPath()),
-                            CURL::GetRedacted(strDirectory));
-                  continue;
-                }
-              }
-
-              // The child contains its own show media, or is a show with its
-              // own season folders. In either case it is not a season folder
-              // of the current directory.
-              bool childIsShow = sample.has_value() || hasOpticalMedia(*child);
-              for (const auto& grandchild : childItems)
-              {
-                if (childIsShow)
-                  break;
-                if (!grandchild->IsFolder() || grandchild->IsParentFolder() ||
-                    HasNoMedia(grandchild->GetPath()) ||
-                    CUtil::ExcludeFileOrFolder(grandchild->GetPath(), regexps, &m_regexpCache) ||
-                    VIDEO::IsInOpticalDiscStructure(grandchild->GetPath()))
-                  continue;
-
-                if (hasOpticalMedia(*grandchild))
-                {
-                  childIsShow = true;
-                  break;
-                }
-                CFileItemList grandchildren;
-                if (!ListRecursiveTvFolder(grandchild->GetPath(), grandchildren))
-                {
-                  CLog::Log(LOGWARNING,
-                            "VideoInfoScanner: Cannot inspect TV subfolder '{}'; skipping "
-                            "subtree and disabling cleanup for this scan",
-                            CURL::GetRedacted(grandchild->GetPath()));
-                  m_bClean = false;
-                  std::string failedPath{grandchild->GetPath()};
-                  URIUtils::AddSlashAtEnd(failedPath);
-                  RemoveSubDirectories(m_pathsToScan, failedPath, {});
-                  continue;
-                }
-                if (sampleFromFiles(grandchildren))
-                {
-                  childIsShow = true;
-                  break;
-                }
-              }
-
-              if (childIsShow)
-                ++independentShowChildren;
-            }
-          }
-
-          // Independent show folders remain distinct even if their titles match.
-          const bool isFranchiseGrouping =
-              independentShowChildren >= 2 || seasonPackYears.size() > 1;
-          if (isFranchiseGrouping)
-            CLog::Log(LOGDEBUG,
-                      "VideoInfoScanner: '{}' contains independent TV show folders or season packs "
-                      "with different years",
-                      CURL::GetRedacted(strDirectory));
-
-          // Optical discs count as media even without an MKV/MP4 file.
-          recursiveTvShowRoot =
-              !isFranchiseGrouping &&
-              (hasVideo || isOpticalDiscRoot || hasDiscVolumes || hasNfo || isKnownShow ||
-               (hasSeasonSubfolders && independentShowChildren == 0));
-        }
+        const auto discovery = FindShowFolder(strDirectory, items, regexps, foundDirectly);
+        if (discovery == TvShowDiscovery::Ambiguous)
+          return std::make_pair(ScanComplete::Completed, ContentFound::None);
+        recursiveTvShowRoot = discovery != TvShowDiscovery::Grouping;
 
         if (recursiveTvShowRoot)
         {
@@ -1141,7 +1181,7 @@ CVideoInfoScanner::~CVideoInfoScanner()
           // The series can be identified by its discs even when it has no
           // episode-labelled files yet. Keep its metadata without inventing
           // episode-to-playlist associations.
-          if (isOpticalDiscRoot || hasDiscVolumes || hasOpticalSeasonSubfolders)
+          if (discovery == TvShowDiscovery::OpticalShow)
             show->SetProperty("recursive_tvshow_optical", true);
           items.Add(show);
           items.SetPath(URIUtils::GetParentPath(strDirectory));

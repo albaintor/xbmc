@@ -2163,6 +2163,70 @@ protected:
 };
 } // namespace
 
+TEST_F(TestVideoInfoScannerTvShows, RecursiveHybridStandardSeasonWithoutNfo)
+{
+  EnableRecursiveScanning();
+  UseTestScraper();
+  Found("Show");
+  Details("Show", "<details><title>Show</title></details>");
+  const std::string show{Folder(Folder(m_root, "Drama"), "Show")};
+  const std::string first{Episode(Folder(show, "Season 01"), "Different.Title.S01E01.mkv")};
+  const std::string second{Episode(Folder(show, "Season 02"), "Different.Title.S02E01.mkv")};
+
+  Scan();
+
+  EXPECT_EQ(1, CountShows());
+  EXPECT_EQ(2, CountEpisodes());
+  ExpectEpisodeInShow(show, first, 1);
+  ExpectEpisodeInShow(show, second, 2);
+}
+
+TEST_F(TestVideoInfoScannerTvShows, RecursiveHybridFlatShowsWithoutMarkers)
+{
+  EnableRecursiveScanning();
+  UseTestScraper();
+  for (const std::string title : {"Stargate SG-1", "Stargate Atlantis"})
+  {
+    Found(title);
+    Details(title, "<details><title>" + title + "</title></details>");
+  }
+  const std::string category{Folder(m_root, "Science Fiction")};
+  const std::string sg1{Folder(category, "Stargate SG-1")};
+  const std::string atlantis{Folder(category, "Stargate Atlantis")};
+  const std::string first{Episode(sg1, "Stargate.SG-1.S01E01.mkv")};
+  const std::string second{Episode(atlantis, "Stargate.Atlantis.S01E01.mkv")};
+
+  Scan();
+
+  EXPECT_EQ(2, CountShows());
+  EXPECT_EQ(2, CountEpisodes());
+  ExpectEpisodeInShow(sg1, first);
+  ExpectEpisodeInShow(atlantis, second);
+  EXPECT_NE(m_db.GetTvShowId(sg1), m_db.GetTvShowId(atlantis));
+}
+
+TEST_F(TestVideoInfoScannerTvShows, RecursiveHybridOpticalVolumesWithoutMarkers)
+{
+  EnableRecursiveScanning();
+  UseTestScraper();
+  Found("Gavan");
+  Details("Gavan", "<details><title>Gavan</title></details>");
+  const std::string show{Folder(Folder(m_root, "Sentai"), "Gavan")};
+  BlurayRip(Folder(show, "GAVAN D1"));
+  BlurayRip(Folder(show, "GAVAN D2"));
+
+  Scan();
+
+  EXPECT_EQ(1, CountShows());
+  EXPECT_EQ(0, CountEpisodes());
+  const int idShow{m_db.GetTvShowId(show)};
+  ASSERT_GT(idShow, 0);
+  std::vector<std::string> paths;
+  ASSERT_TRUE(m_db.GetPathsLinkedToTvShow(idShow, paths));
+  EXPECT_TRUE(std::ranges::any_of(paths, [&show](const auto& path)
+                                 { return URIUtils::PathEquals(path, show, true); }));
+}
+
 TEST_F(TestVideoInfoScannerTvShows, RecursiveCategoryContainsIndependentShows)
 {
   EnableRecursiveScanning();

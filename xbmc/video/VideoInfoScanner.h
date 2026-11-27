@@ -493,6 +493,24 @@ typedef struct SScanSettings
      */
     std::string GetEditionFromFolderName(const std::string& folderName);
 
+    enum class TvShowDiscovery
+    {
+      Grouping,
+      Show,
+      OpticalShow,
+      Ambiguous
+    };
+
+    static bool HasExplicitTvShowNfo(const std::string& directory, const CFileItemList& items);
+    bool IsStandardTvSeason(const std::string& name);
+    TvShowDiscovery FindShowFolder(const std::string& directory,
+                                  const CFileItemList& items,
+                                  const std::vector<std::string>& regexps,
+                                  bool foundDirectly);
+    TvShowDiscovery FindShowFolderByMedia(const std::string& directory,
+                                         const CFileItemList& items,
+                                         const std::vector<std::string>& regexps,
+                                         bool hasStandardSeason);
     bool ListRecursiveTvFolder(const std::string& path, CFileItemList& items);
     std::map<std::string, std::shared_ptr<CFileItemList>> m_recursiveTvListings;
 
